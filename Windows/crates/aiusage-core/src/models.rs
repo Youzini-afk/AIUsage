@@ -38,7 +38,7 @@ pub enum CredentialKind {
     WebSession,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProxyTrack {
     ClaudeCode,
