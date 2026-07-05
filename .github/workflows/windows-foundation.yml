@@ -8,11 +8,13 @@ on:
       - "Windows/**"
       - "docs/WINDOWS_*.md"
       - ".github/workflows/windows-foundation.yml"
+      - ".github/workflows/windows-release.yml"
   pull_request:
     paths:
       - "Windows/**"
       - "docs/WINDOWS_*.md"
       - ".github/workflows/windows-foundation.yml"
+      - ".github/workflows/windows-release.yml"
 
 permissions:
   contents: read
