@@ -1,10 +1,13 @@
 use aiusage_core::phase_a_snapshot;
 use aiusage_platform::AppPaths;
+use aiusage_proxy::{ProxyError, ProxySupervisor};
 use aiusage_services::{ManagedConfigService, ServiceError};
 use aiusage_windows::{WindowsAppPaths, WindowsFilePermissionGuard};
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
-pub use aiusage_core::DesktopSnapshot;
+pub use aiusage_core::{DesktopSnapshot, ProxyTrack};
+pub use aiusage_proxy::{ProxyHealth, ProxyProtocol, ProxyRuntimeConfig, ProxyRuntimeState};
 pub use aiusage_services::{
     ClaudeActivationRequest, CodexActivationRequest, ManagedConfigKind, ManagedConfigStatus,
     ManagedConfigTargetKind, OpenCodeActivationRequest,
@@ -44,6 +47,18 @@ pub fn build_phase_a_desktop_snapshot() -> TauriDesktopSnapshot {
             opencode_config_dir: paths.opencode_config_dir().ok().map(display_path),
         },
     }
+}
+
+pub async fn proxy_statuses() -> Vec<ProxyHealth> {
+    proxy_supervisor().all_health().await
+}
+
+pub async fn start_proxy_runtime(config: ProxyRuntimeConfig) -> Result<ProxyHealth, ProxyError> {
+    proxy_supervisor().start(config).await
+}
+
+pub async fn stop_proxy_runtime(track: ProxyTrack) -> Result<ProxyHealth, ProxyError> {
+    proxy_supervisor().stop(track).await
 }
 
 pub fn managed_config_statuses() -> Result<Vec<ManagedConfigStatus>, ServiceError> {
@@ -88,6 +103,11 @@ pub fn restore_opencode_config(
 
 fn managed_config_service() -> ManagedConfigService<WindowsAppPaths, WindowsFilePermissionGuard> {
     ManagedConfigService::with_permissions(WindowsAppPaths::new(), WindowsFilePermissionGuard)
+}
+
+fn proxy_supervisor() -> &'static ProxySupervisor {
+    static SUPERVISOR: OnceLock<ProxySupervisor> = OnceLock::new();
+    SUPERVISOR.get_or_init(ProxySupervisor::new)
 }
 
 fn display_path(path: std::path::PathBuf) -> String {

@@ -1,8 +1,9 @@
 use aiusage_tauri::{
     activate_claude_config, activate_codex_config, activate_opencode_config,
     build_phase_a_snapshot, managed_config_statuses, restore_claude_config, restore_codex_config,
-    restore_opencode_config, ClaudeActivationRequest, CodexActivationRequest, DesktopSnapshot,
-    ManagedConfigStatus, OpenCodeActivationRequest,
+    restore_opencode_config, start_proxy_runtime, stop_proxy_runtime, ClaudeActivationRequest,
+    CodexActivationRequest, DesktopSnapshot, ManagedConfigStatus, OpenCodeActivationRequest,
+    ProxyHealth, ProxyRuntimeConfig, ProxyTrack,
 };
 
 #[tauri::command]
@@ -13,6 +14,25 @@ fn app_snapshot() -> DesktopSnapshot {
 #[tauri::command]
 fn config_statuses() -> Result<Vec<ManagedConfigStatus>, String> {
     managed_config_statuses().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn proxy_statuses() -> Result<Vec<ProxyHealth>, String> {
+    Ok(aiusage_tauri::proxy_statuses().await)
+}
+
+#[tauri::command]
+async fn start_proxy(config: ProxyRuntimeConfig) -> Result<ProxyHealth, String> {
+    start_proxy_runtime(config)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn stop_proxy(track: ProxyTrack) -> Result<ProxyHealth, String> {
+    stop_proxy_runtime(track)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -60,6 +80,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_snapshot,
             config_statuses,
+            proxy_statuses,
+            start_proxy,
+            stop_proxy,
             apply_claude_config,
             restore_claude_managed_config,
             apply_codex_config,

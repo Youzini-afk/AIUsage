@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 aiusage-core.workspace = true
 aiusage-platform.workspace = true
+aiusage-proxy.workspace = true
 aiusage-services.workspace = true
 aiusage-windows.workspace = true
 serde.workspace = true

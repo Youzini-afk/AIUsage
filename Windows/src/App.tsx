@@ -12,6 +12,7 @@ import {
   MonitorCog,
   Network,
   Settings,
+  ServerCog,
   TerminalSquare
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -30,6 +31,14 @@ type DesktopSnapshot = {
   surfaces: ProductSurface[];
   providers: ProductSurface[];
   releaseTargets: string[];
+};
+
+type ProxyRuntimeState = "stopped" | "starting" | "running" | "stopping" | "failed";
+
+type ProxyHealth = {
+  track: "claudeCode" | "codex" | "openCode" | "global";
+  state: ProxyRuntimeState;
+  listeningPort: number | null;
 };
 
 const fallbackSnapshot: DesktopSnapshot = {
@@ -85,14 +94,46 @@ function statusLabel(status: FeatureStatus): string {
   }
 }
 
+function runtimeStateLabel(state: ProxyRuntimeState): string {
+  switch (state) {
+    case "running":
+      return "Running";
+    case "starting":
+      return "Starting";
+    case "stopping":
+      return "Stopping";
+    case "failed":
+      return "Failed";
+    default:
+      return "Stopped";
+  }
+}
+
+function proxyTrackLabel(track: ProxyHealth["track"]): string {
+  switch (track) {
+    case "claudeCode":
+      return "Claude Code";
+    case "openCode":
+      return "OpenCode";
+    case "global":
+      return "Global";
+    default:
+      return "Codex";
+  }
+}
+
 export function App() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>(fallbackSnapshot);
+  const [proxyHealth, setProxyHealth] = useState<ProxyHealth[]>([]);
   const [activeSection, setActiveSection] = useState("dashboard");
 
   useEffect(() => {
     invoke<DesktopSnapshot>("app_snapshot")
       .then(setSnapshot)
       .catch(() => setSnapshot(fallbackSnapshot));
+    invoke<ProxyHealth[]>("proxy_statuses")
+      .then(setProxyHealth)
+      .catch(() => setProxyHealth([]));
   }, []);
 
   const activeSurface = useMemo(
@@ -101,6 +142,7 @@ export function App() {
   );
 
   const readyCount = snapshot.surfaces.filter((surface) => surface.status !== "planned").length;
+  const runningProxyCount = proxyHealth.filter((health) => health.state === "running").length;
 
   return (
     <main className="app-shell">
@@ -162,6 +204,12 @@ export function App() {
             <span>Release targets</span>
             <strong>{snapshot.releaseTargets.length}</strong>
           </section>
+          <section className="stat-tile">
+            <span>Proxy tracks running</span>
+            <strong>
+              {runningProxyCount}/{proxyHealth.length || 4}
+            </strong>
+          </section>
         </div>
 
         <section className="panel">
@@ -195,6 +243,32 @@ export function App() {
           <div className="target-row">
             {snapshot.releaseTargets.map((target) => (
               <span key={target}>{target}</span>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel compact-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Runtime health</p>
+              <h3>Proxy supervisor</h3>
+            </div>
+            <ServerCog size={18} />
+          </div>
+          <div className="surface-list single-column">
+            {(proxyHealth.length ? proxyHealth : [
+              { track: "claudeCode", state: "stopped", listeningPort: null },
+              { track: "codex", state: "stopped", listeningPort: null },
+              { track: "openCode", state: "stopped", listeningPort: null },
+              { track: "global", state: "stopped", listeningPort: null }
+            ] satisfies ProxyHealth[]).map((health) => (
+              <article key={health.track} className="surface-row">
+                <div>
+                  <strong>{proxyTrackLabel(health.track)}</strong>
+                  <span>{health.listeningPort ? `127.0.0.1:${health.listeningPort}` : "Not listening"}</span>
+                </div>
+                <span className={`status runtime-${health.state}`}>{runtimeStateLabel(health.state)}</span>
+              </article>
             ))}
           </div>
         </section>

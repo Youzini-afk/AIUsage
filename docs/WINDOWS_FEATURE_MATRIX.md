@@ -30,7 +30,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | Platform adapters | Windows app paths, Credential Manager + DPAPI vault, browser profile discovery, system proxy snapshot, TCP port owner lookup, and sensitive-file permission tightening are implemented behind traits |
 | Config transforms | Codex `config.toml` managed blocks and OpenCode provider/model injection are implemented in `aiusage-core` |
 | Config takeover service | Claude/Codex/OpenCode native Windows paths, custom paths, sidecar `.aiusage.bak` backups, idempotent activation, restore, OpenCode JSONC parsing, and Tauri commands are implemented |
-| Proxy runtime | Async Rust passthrough supervisor starts/stops local listeners, exposes health, validates client keys, normalizes `/v1` upstream paths, injects upstream auth, and streams upstream responses |
+| Proxy runtime | Async Rust passthrough supervisor starts/stops local listeners, exposes health through Tauri, validates client keys, normalizes `/v1` upstream paths, injects upstream auth, streams upstream responses, and surfaces four-track health in the Windows UI |
 
 ## Provider Matrix
 

@@ -145,7 +145,7 @@ nav {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -256,6 +256,31 @@ nav {
 .status.blocked {
   background: #f7e1df;
   color: #92362f;
+}
+
+.status.runtime-running {
+  background: #e2f0df;
+  color: #286227;
+}
+
+.status.runtime-starting,
+.status.runtime-stopping {
+  background: #e7effd;
+  color: #1c4e93;
+}
+
+.status.runtime-stopped {
+  background: #edf0f2;
+  color: #596571;
+}
+
+.status.runtime-failed {
+  background: #f7e1df;
+  color: #92362f;
+}
+
+.single-column {
+  grid-template-columns: 1fr;
 }
 
 .target-row {
