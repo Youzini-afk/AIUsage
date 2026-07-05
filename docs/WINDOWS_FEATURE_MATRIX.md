@@ -36,6 +36,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | Call Analytics inventory | Windows service scans `%USERPROFILE%\.claude.json`, `%USERPROFILE%\.claude\settings.json`, `%USERPROFILE%\.claude\projects`, `%USERPROFILE%\.codex\config.toml`, `%USERPROFILE%\.codex\sessions`, `%USERPROFILE%\.codex\archived_sessions`, `%USERPROFILE%\.config\opencode\opencode.json[c]`, OpenCode data DB candidates, and user skill roots; results are exposed through Tauri and summarized in the Windows UI |
 | Call Analytics aggregation | Windows snapshot service aggregates Claude `tool_use`/`tool_result`, Codex `function_call`/`mcp_tool_call_end`, and OpenCode `part` table tool rows into day/source/kind/name entries with success and duration signals where available |
 | Credential registry | Structured provider credentials are stored in Windows Credential Manager/DPAPI through the platform vault, exposed as secret-free summaries through Tauri, and counted in the Windows UI |
+| App settings | `%APPDATA%\AIUsage\settings.json` stores non-secret Windows preferences, Tauri commands expose load/save, and launch-at-login syncs with the HKCU Run registry key through the Windows autostart adapter |
 | Packaging | Windows release workflow builds NSIS and MSI bundles, optionally signs artifacts with SignTool, emits SHA256 checksums, uploads artifacts, and publishes tag release assets |
 
 ## Provider Matrix
@@ -84,7 +85,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | Browser opening | Tauri opener / Windows shell |
 | Web login | System browser first; embedded WebView only when product requirements demand it |
 | Notifications | Tauri notification plugin or Windows notification integration |
-| Launch at login | Tauri autostart plugin, fallback documented |
+| Launch at login | HKCU Run registry adapter implemented; Tauri plugin can still replace it if richer tray lifecycle behavior requires |
 | System proxy detection | WinHTTP/WinINET APIs |
 | Certificate trust | User certificate store first; admin/local-machine trust as explicit flow |
 | Process lifecycle | Rust supervisor, Windows Job Objects if needed |

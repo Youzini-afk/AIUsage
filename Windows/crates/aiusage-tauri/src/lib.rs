@@ -2,20 +2,22 @@ use aiusage_core::phase_a_snapshot;
 use aiusage_platform::AppPaths;
 use aiusage_proxy::{ProxyError, ProxyRuntimeEvent, ProxySupervisor};
 use aiusage_services::{
-    CallAnalyticsInventoryService, CallAnalyticsService, CredentialRegistry, ManagedConfigService,
-    ServiceError,
+    AppSettingsService, CallAnalyticsInventoryService, CallAnalyticsService, CredentialRegistry,
+    ManagedConfigService, ServiceError,
 };
-use aiusage_windows::{WindowsAppPaths, WindowsCredentialVault, WindowsFilePermissionGuard};
+use aiusage_windows::{
+    WindowsAppPaths, WindowsAutostartManager, WindowsCredentialVault, WindowsFilePermissionGuard,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
 pub use aiusage_core::{DesktopSnapshot, ProxyTrack};
 pub use aiusage_proxy::{ProxyHealth, ProxyProtocol, ProxyRuntimeConfig, ProxyRuntimeState};
 pub use aiusage_services::{
-    CallAnalyticsInventorySnapshot, CallAnalyticsSnapshot, ClaudeActivationRequest,
-    CodexActivationRequest, CredentialSummary, ManagedConfigKind, ManagedConfigStatus,
-    ManagedConfigTargetKind, OpenCodeActivationRequest, ProxyUsageArchiveSummary, ProxyUsageStats,
-    UpsertCredentialRequest,
+    AppLanguage, AppSettingsDocument, AppSettingsSnapshot, CallAnalyticsInventorySnapshot,
+    CallAnalyticsSnapshot, ClaudeActivationRequest, CodexActivationRequest, CredentialSummary,
+    ManagedConfigKind, ManagedConfigStatus, ManagedConfigTargetKind, OpenCodeActivationRequest,
+    ProxyUsageArchiveSummary, ProxyUsageStats, ThemeMode, UpsertCredentialRequest,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -83,6 +85,16 @@ pub fn call_analytics_inventory() -> Result<CallAnalyticsInventorySnapshot, Serv
 
 pub fn call_analytics_snapshot() -> Result<CallAnalyticsSnapshot, ServiceError> {
     CallAnalyticsService::new(WindowsAppPaths::new()).snapshot()
+}
+
+pub fn app_settings() -> Result<AppSettingsSnapshot, ServiceError> {
+    app_settings_service().snapshot()
+}
+
+pub fn save_app_settings(
+    settings: AppSettingsDocument,
+) -> Result<AppSettingsSnapshot, ServiceError> {
+    app_settings_service().save(settings)
 }
 
 pub fn credential_summaries() -> Result<Vec<CredentialSummary>, ServiceError> {
@@ -180,6 +192,10 @@ fn proxy_usage_archive_store(
 
 fn credential_registry() -> CredentialRegistry<WindowsCredentialVault> {
     CredentialRegistry::new(WindowsCredentialVault::default())
+}
+
+fn app_settings_service() -> AppSettingsService<WindowsAppPaths, WindowsAutostartManager> {
+    AppSettingsService::with_autostart(WindowsAppPaths::new(), WindowsAutostartManager::default())
 }
 
 fn display_path(path: std::path::PathBuf) -> String {

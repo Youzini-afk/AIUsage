@@ -8,16 +8,16 @@ use std::{
 
 use aiusage_core::CredentialKind;
 use aiusage_platform::{
-    AppPaths, BrowserProfile, BrowserSessionDiscovery, CredentialVault, FilePermissionGuard,
-    PlatformError, PlatformResult, PortInspector, PortOwner, ProtectedData, SystemProxyReader,
-    SystemProxySnapshot,
+    AppPaths, AutostartManager, BrowserProfile, BrowserSessionDiscovery, CredentialVault,
+    FilePermissionGuard, PlatformError, PlatformResult, PortInspector, PortOwner, ProtectedData,
+    SystemProxyReader, SystemProxySnapshot,
 };
 use windows::{
     core::{PCWSTR, PWSTR},
     Win32::{
         Foundation::{
-            GetLastError, GlobalFree, LocalFree, ERROR_INSUFFICIENT_BUFFER, HGLOBAL, HLOCAL,
-            WIN32_ERROR,
+            GetLastError, GlobalFree, LocalFree, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER,
+            ERROR_SUCCESS, HGLOBAL, HLOCAL, WIN32_ERROR,
         },
         NetworkManagement::IpHelper::{
             GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, TCP_TABLE_CLASS,
@@ -37,6 +37,11 @@ use windows::{
             Cryptography::{
                 CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
             },
+        },
+        System::Registry::{
+            RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
+            RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE,
+            REG_OPTION_NON_VOLATILE, REG_SZ,
         },
     },
 };
@@ -316,6 +321,110 @@ impl PortInspector for WindowsPortInspector {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct WindowsAutostartManager {
+    value_name: String,
+    executable_path: Option<PathBuf>,
+}
+
+impl Default for WindowsAutostartManager {
+    fn default() -> Self {
+        Self::new("AIUsage")
+    }
+}
+
+impl WindowsAutostartManager {
+    pub fn new(value_name: impl Into<String>) -> Self {
+        Self {
+            value_name: value_name.into(),
+            executable_path: None,
+        }
+    }
+
+    pub fn with_executable_path(value_name: impl Into<String>, executable_path: PathBuf) -> Self {
+        Self {
+            value_name: value_name.into(),
+            executable_path: Some(executable_path),
+        }
+    }
+
+    fn launch_command(&self) -> PlatformResult<String> {
+        let path = match &self.executable_path {
+            Some(path) => path.clone(),
+            None => env::current_exe().map_err(PlatformError::Io)?,
+        };
+        Ok(format!("\"{}\"", path.display()))
+    }
+}
+
+impl AutostartManager for WindowsAutostartManager {
+    fn is_enabled(&self) -> PlatformResult<bool> {
+        let key = open_run_key(KEY_READ)?;
+        let value_name = wide_null(&self.value_name);
+        let mut value_type = Default::default();
+        let mut byte_len = 0_u32;
+        let result = unsafe {
+            RegQueryValueExW(
+                key.0,
+                PCWSTR(value_name.as_ptr()),
+                None,
+                Some(&mut value_type),
+                None,
+                Some(&mut byte_len),
+            )
+        };
+        key.close();
+        if result == ERROR_FILE_NOT_FOUND {
+            return Ok(false);
+        }
+        if result != ERROR_SUCCESS {
+            return Err(windows_error("RegQueryValueExW", result));
+        }
+        Ok(byte_len > 0)
+    }
+
+    fn set_enabled(&self, enabled: bool) -> PlatformResult<()> {
+        let key = create_run_key()?;
+        let value_name = wide_null(&self.value_name);
+        let result = if enabled {
+            let command = wide_null(&self.launch_command()?);
+            let bytes = unsafe {
+                std::slice::from_raw_parts(
+                    command.as_ptr().cast::<u8>(),
+                    command.len() * std::mem::size_of::<u16>(),
+                )
+            };
+            unsafe {
+                RegSetValueExW(
+                    key.0,
+                    PCWSTR(value_name.as_ptr()),
+                    None,
+                    REG_SZ,
+                    Some(bytes),
+                )
+            }
+        } else {
+            unsafe { RegDeleteValueW(key.0, PCWSTR(value_name.as_ptr())) }
+        };
+        key.close();
+
+        if !enabled && result == ERROR_FILE_NOT_FOUND {
+            return Ok(());
+        }
+        if result != ERROR_SUCCESS {
+            return Err(windows_error(
+                if enabled {
+                    "RegSetValueExW"
+                } else {
+                    "RegDeleteValueW"
+                },
+                result,
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct WindowsFilePermissionGuard;
 
@@ -426,6 +535,58 @@ fn tcp_owner_rows() -> PlatformResult<Vec<MIB_TCPROW_OWNER_PID>> {
         .collect())
 }
 
+struct RegistryKey(HKEY);
+
+impl RegistryKey {
+    fn close(self) {
+        unsafe {
+            let _ = RegCloseKey(self.0);
+        }
+    }
+}
+
+fn open_run_key(
+    access: windows::Win32::System::Registry::REG_SAM_FLAGS,
+) -> PlatformResult<RegistryKey> {
+    let subkey = wide_null("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+    let mut key = HKEY::default();
+    let result = unsafe {
+        RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(subkey.as_ptr()),
+            None,
+            access,
+            &mut key,
+        )
+    };
+    if result != ERROR_SUCCESS {
+        return Err(windows_error("RegOpenKeyExW", result));
+    }
+    Ok(RegistryKey(key))
+}
+
+fn create_run_key() -> PlatformResult<RegistryKey> {
+    let subkey = wide_null("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+    let mut key = HKEY::default();
+    let result = unsafe {
+        RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            PCWSTR(subkey.as_ptr()),
+            None,
+            PCWSTR::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            None,
+            &mut key,
+            None,
+        )
+    };
+    if result != ERROR_SUCCESS {
+        return Err(windows_error("RegCreateKeyExW", result));
+    }
+    Ok(RegistryKey(key))
+}
+
 fn crypt_protect(data: &[u8], description: &str) -> PlatformResult<Vec<u8>> {
     let input = CRYPT_INTEGER_BLOB {
         cbData: data.len() as u32,
@@ -534,8 +695,8 @@ fn windows_error(operation: &'static str, code: WIN32_ERROR) -> PlatformError {
 mod tests {
     use super::*;
     use aiusage_platform::{
-        AppPaths, BrowserSessionDiscovery, CredentialVault, FilePermissionGuard, PortInspector,
-        ProtectedData, SystemProxyReader,
+        AppPaths, AutostartManager, BrowserSessionDiscovery, CredentialVault, FilePermissionGuard,
+        PortInspector, ProtectedData, SystemProxyReader,
     };
     use std::{
         fs,
@@ -628,5 +789,29 @@ mod tests {
             .restrict_current_user(&path)
             .expect("icacls should restrict the temp file");
         fs::remove_file(path).expect("restricted file should remain removable by current user");
+    }
+
+    #[test]
+    fn autostart_manager_round_trips_unique_run_value() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after epoch")
+            .as_nanos();
+        let manager = WindowsAutostartManager::with_executable_path(
+            format!("AIUsageTest{suffix}"),
+            env::current_exe().expect("test executable path"),
+        );
+        manager
+            .set_enabled(false)
+            .expect("autostart delete should be idempotent");
+        assert!(!manager.is_enabled().expect("autostart should be disabled"));
+        manager
+            .set_enabled(true)
+            .expect("autostart enable should write HKCU Run");
+        assert!(manager.is_enabled().expect("autostart should be enabled"));
+        manager
+            .set_enabled(false)
+            .expect("autostart disable should delete HKCU Run value");
+        assert!(!manager.is_enabled().expect("autostart should be disabled"));
     }
 }

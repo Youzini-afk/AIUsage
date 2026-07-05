@@ -1,10 +1,12 @@
 use aiusage_tauri::{
     activate_claude_config, activate_codex_config, activate_opencode_config,
-    build_phase_a_snapshot, credential_summaries, delete_credential, managed_config_statuses,
-    restore_claude_config, restore_codex_config, restore_opencode_config, save_credential,
-    start_proxy_runtime, stop_proxy_runtime, CallAnalyticsInventorySnapshot, CallAnalyticsSnapshot,
-    ClaudeActivationRequest, CodexActivationRequest, CredentialSummary, DesktopSnapshot,
-    ManagedConfigStatus, OpenCodeActivationRequest, ProxyHealth, ProxyRuntimeConfig, ProxyTrack,
+    app_settings as load_app_settings, build_phase_a_snapshot, credential_summaries,
+    delete_credential, managed_config_statuses, restore_claude_config, restore_codex_config,
+    restore_opencode_config, save_app_settings as persist_app_settings, save_credential,
+    start_proxy_runtime, stop_proxy_runtime, AppSettingsDocument, AppSettingsSnapshot,
+    CallAnalyticsInventorySnapshot, CallAnalyticsSnapshot, ClaudeActivationRequest,
+    CodexActivationRequest, CredentialSummary, DesktopSnapshot, ManagedConfigStatus,
+    OpenCodeActivationRequest, ProxyHealth, ProxyRuntimeConfig, ProxyTrack,
     ProxyUsageArchiveSummary, ProxyUsageStats, UpsertCredentialRequest,
 };
 
@@ -41,6 +43,16 @@ fn call_analytics_inventory() -> Result<CallAnalyticsInventorySnapshot, String> 
 #[tauri::command]
 fn call_analytics_snapshot() -> Result<CallAnalyticsSnapshot, String> {
     aiusage_tauri::call_analytics_snapshot().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn app_settings() -> Result<AppSettingsSnapshot, String> {
+    load_app_settings().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_app_settings(settings: AppSettingsDocument) -> Result<AppSettingsSnapshot, String> {
+    persist_app_settings(settings).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -122,6 +134,8 @@ pub fn run() {
             proxy_usage_stats,
             call_analytics_inventory,
             call_analytics_snapshot,
+            app_settings,
+            save_app_settings,
             credentials,
             save_provider_credential,
             delete_provider_credential,

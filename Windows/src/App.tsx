@@ -125,6 +125,27 @@ type CallAnalyticsSnapshot = {
   sources: CallAnalyticsSourceScanStatus[];
 };
 
+type ThemeMode = "system" | "light" | "dark";
+type AppLanguage = "en" | "zh";
+
+type AppSettingsDocument = {
+  version: number;
+  themeMode: ThemeMode;
+  language: AppLanguage;
+  autoRefreshIntervalSecs: number;
+  proxyAutoRestoreOnLaunch: boolean;
+  minimizeToTrayOnClose: boolean;
+  keepRunningInBackground: boolean;
+  launchAtLogin: boolean;
+};
+
+type AppSettingsSnapshot = {
+  settings: AppSettingsDocument;
+  settingsPath: string;
+  autostartEnabled: boolean;
+  autostartError: string | null;
+};
+
 type CredentialSummary = {
   id: string;
   providerId: string;
@@ -172,6 +193,17 @@ const sections = [
   { id: "inbox", label: "Inbox", icon: MessageSquareText },
   { id: "settings", label: "Settings", icon: Settings }
 ];
+
+const defaultAppSettings: AppSettingsDocument = {
+  version: 1,
+  themeMode: "system",
+  language: "en",
+  autoRefreshIntervalSecs: 300,
+  proxyAutoRestoreOnLaunch: false,
+  minimizeToTrayOnClose: true,
+  keepRunningInBackground: true,
+  launchAtLogin: false
+};
 
 function statusLabel(status: FeatureStatus): string {
   switch (status) {
@@ -249,6 +281,7 @@ export function App() {
   const [proxyUsageStats, setProxyUsageStats] = useState<ProxyUsageStats | null>(null);
   const [callInventory, setCallInventory] = useState<CallAnalyticsInventorySnapshot | null>(null);
   const [callSnapshot, setCallSnapshot] = useState<CallAnalyticsSnapshot | null>(null);
+  const [appSettings, setAppSettings] = useState<AppSettingsSnapshot | null>(null);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [activeSection, setActiveSection] = useState("dashboard");
 
@@ -271,6 +304,9 @@ export function App() {
     invoke<CallAnalyticsSnapshot>("call_analytics_snapshot")
       .then(setCallSnapshot)
       .catch(() => setCallSnapshot(null));
+    invoke<AppSettingsSnapshot>("app_settings")
+      .then(setAppSettings)
+      .catch(() => setAppSettings(null));
     invoke<CredentialSummary[]>("credentials")
       .then(setCredentials)
       .catch(() => setCredentials([]));
@@ -353,6 +389,21 @@ export function App() {
   const topCallEntries = [...callEntries]
     .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
     .slice(0, 6);
+  const settingsDocument = appSettings?.settings ?? defaultAppSettings;
+
+  function saveSettingsPatch(patch: Partial<AppSettingsDocument>) {
+    const previous = appSettings;
+    const nextSettings = { ...settingsDocument, ...patch };
+    setAppSettings({
+      settings: nextSettings,
+      settingsPath: previous?.settingsPath ?? "",
+      autostartEnabled: nextSettings.launchAtLogin,
+      autostartError: null
+    });
+    invoke<AppSettingsSnapshot>("save_app_settings", { settings: nextSettings })
+      .then(setAppSettings)
+      .catch(() => setAppSettings(previous));
+  }
 
   return (
     <main className="app-shell">
@@ -561,6 +612,88 @@ export function App() {
                 <span className="usage-total">{entry.count.toLocaleString()}</span>
               </article>
             ))}
+          </div>
+        </section>
+
+        <section className="panel compact-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Preferences</p>
+              <h3>Windows settings</h3>
+            </div>
+            <Settings size={18} />
+          </div>
+          <div className="settings-list">
+            <label className="setting-row">
+              <span>Theme</span>
+              <select
+                value={settingsDocument.themeMode}
+                onChange={(event) => saveSettingsPatch({ themeMode: event.target.value as ThemeMode })}
+              >
+                <option value="system">System</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </label>
+            <label className="setting-row">
+              <span>Language</span>
+              <select
+                value={settingsDocument.language}
+                onChange={(event) => saveSettingsPatch({ language: event.target.value as AppLanguage })}
+              >
+                <option value="en">English</option>
+                <option value="zh">中文</option>
+              </select>
+            </label>
+            <label className="setting-row">
+              <span>Refresh interval</span>
+              <select
+                value={settingsDocument.autoRefreshIntervalSecs}
+                onChange={(event) => saveSettingsPatch({ autoRefreshIntervalSecs: Number(event.target.value) })}
+              >
+                <option value={30}>30s</option>
+                <option value={60}>1m</option>
+                <option value={300}>5m</option>
+                <option value={900}>15m</option>
+                <option value={1800}>30m</option>
+                <option value={3600}>1h</option>
+                <option value={0}>Off</option>
+              </select>
+            </label>
+            <label className="setting-row">
+              <span>Launch at login</span>
+              <input
+                type="checkbox"
+                checked={settingsDocument.launchAtLogin}
+                onChange={(event) => saveSettingsPatch({ launchAtLogin: event.target.checked })}
+              />
+            </label>
+            <label className="setting-row">
+              <span>Restore proxies on launch</span>
+              <input
+                type="checkbox"
+                checked={settingsDocument.proxyAutoRestoreOnLaunch}
+                onChange={(event) => saveSettingsPatch({ proxyAutoRestoreOnLaunch: event.target.checked })}
+              />
+            </label>
+            <label className="setting-row">
+              <span>Minimize to tray on close</span>
+              <input
+                type="checkbox"
+                checked={settingsDocument.minimizeToTrayOnClose}
+                onChange={(event) => saveSettingsPatch({ minimizeToTrayOnClose: event.target.checked })}
+              />
+            </label>
+            <label className="setting-row">
+              <span>Keep running in background</span>
+              <input
+                type="checkbox"
+                checked={settingsDocument.keepRunningInBackground}
+                onChange={(event) => saveSettingsPatch({ keepRunningInBackground: event.target.checked })}
+              />
+            </label>
+            <div className="settings-path">{appSettings?.settingsPath || "%APPDATA%\\AIUsage\\settings.json"}</div>
+            {appSettings?.autostartError ? <div className="settings-error">{appSettings.autostartError}</div> : null}
           </div>
         </section>
 

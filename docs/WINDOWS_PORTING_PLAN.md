@@ -40,12 +40,13 @@ Deliverables:
 
 - Windows `CredentialVault` using Credential Manager / DPAPI.
 - Windows paths service for `%APPDATA%`, `%LOCALAPPDATA%`, native CLI paths, and explicit WSL paths.
+- App settings store for non-secret preferences under `%APPDATA%\AIUsage\settings.json`.
 - Browser profile discovery for Chrome, Edge, Brave, Cursor, and configurable custom profiles.
 - Windows cookie decrypt implementation.
 - Process/port inspector using Windows APIs.
 - System proxy reader.
 - Certificate generation/trust installer.
-- Autostart, shell open, notifications, and log export adapters.
+- Autostart, shell open, notifications, and log export adapters. Launch-at-login now has a Windows HKCU Run adapter wired through Tauri settings commands.
 
 Completion criteria:
 

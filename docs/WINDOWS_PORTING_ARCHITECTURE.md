@@ -116,7 +116,7 @@ Windows implementations:
 - Process/ports: Windows process APIs and IP Helper TCP tables.
 - Proxy settings: WinHTTP/WinINET current user proxy read.
 - Certificates: user or local-machine certificate store installation flow with clear elevation behavior.
-- Autostart: Tauri plugin first, with explicit fallback if product requirements need more control.
+- Autostart: current-user HKCU Run registry adapter is implemented; Tauri plugin remains an option if richer tray lifecycle behavior requires it.
 
 ## Desktop Shell
 

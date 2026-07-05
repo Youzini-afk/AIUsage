@@ -13,7 +13,7 @@ use aiusage_core::{
     ClaudeManagedSettings, CodexManagedConfig, CredentialKind, OpenCodeManagedNode,
 };
 use aiusage_platform::{
-    AppPaths, CredentialVault, FilePermissionGuard, PlatformError, PlatformResult,
+    AppPaths, AutostartManager, CredentialVault, FilePermissionGuard, PlatformError, PlatformResult,
 };
 use aiusage_proxy::ProxyUsage;
 use chrono::{DateTime, Local, Utc};
@@ -39,12 +39,26 @@ pub enum ServiceError {
 pub type ServiceResult<T> = Result<T, ServiceError>;
 
 pub const PROXY_USAGE_ARCHIVE_VERSION: u32 = 1;
+pub const APP_SETTINGS_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Default)]
 pub struct NoopFilePermissionGuard;
 
 impl FilePermissionGuard for NoopFilePermissionGuard {
     fn restrict_current_user(&self, _path: &Path) -> PlatformResult<()> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct NoopAutostartManager;
+
+impl AutostartManager for NoopAutostartManager {
+    fn is_enabled(&self) -> PlatformResult<bool> {
+        Ok(false)
+    }
+
+    fn set_enabled(&self, _enabled: bool) -> PlatformResult<()> {
         Ok(())
     }
 }
@@ -76,6 +90,58 @@ pub struct ManagedConfigStatus {
     pub managed: bool,
     pub uses_jsonc: bool,
     pub parse_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemeMode {
+    System,
+    Light,
+    Dark,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AppLanguage {
+    En,
+    Zh,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettingsDocument {
+    pub version: u32,
+    pub theme_mode: ThemeMode,
+    pub language: AppLanguage,
+    pub auto_refresh_interval_secs: u32,
+    pub proxy_auto_restore_on_launch: bool,
+    pub minimize_to_tray_on_close: bool,
+    pub keep_running_in_background: bool,
+    pub launch_at_login: bool,
+}
+
+impl Default for AppSettingsDocument {
+    fn default() -> Self {
+        Self {
+            version: APP_SETTINGS_VERSION,
+            theme_mode: ThemeMode::System,
+            language: AppLanguage::En,
+            auto_refresh_interval_secs: 300,
+            proxy_auto_restore_on_launch: false,
+            minimize_to_tray_on_close: true,
+            keep_running_in_background: true,
+            launch_at_login: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettingsSnapshot {
+    pub settings: AppSettingsDocument,
+    pub settings_path: String,
+    pub autostart_enabled: bool,
+    pub autostart_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -334,6 +400,83 @@ pub struct UpsertCredentialRequest {
 #[derive(Clone, Debug)]
 pub struct CredentialRegistry<V> {
     vault: V,
+}
+
+#[derive(Clone, Debug)]
+pub struct AppSettingsService<P, A = NoopAutostartManager> {
+    paths: P,
+    autostart: A,
+}
+
+impl<P> AppSettingsService<P, NoopAutostartManager>
+where
+    P: AppPaths,
+{
+    pub fn new(paths: P) -> Self {
+        Self {
+            paths,
+            autostart: NoopAutostartManager,
+        }
+    }
+}
+
+impl<P, A> AppSettingsService<P, A>
+where
+    P: AppPaths,
+    A: AutostartManager,
+{
+    pub fn with_autostart(paths: P, autostart: A) -> Self {
+        Self { paths, autostart }
+    }
+
+    pub fn snapshot(&self) -> ServiceResult<AppSettingsSnapshot> {
+        self.snapshot_with_settings(self.load_settings()?)
+    }
+
+    pub fn save(&self, mut settings: AppSettingsDocument) -> ServiceResult<AppSettingsSnapshot> {
+        settings.version = APP_SETTINGS_VERSION;
+        validate_app_settings(&settings)?;
+        self.autostart.set_enabled(settings.launch_at_login)?;
+        let path = self.settings_path()?;
+        write_json_atomically(&path, &serde_json::to_value(&settings)?)?;
+        self.snapshot_with_settings(settings)
+    }
+
+    fn snapshot_with_settings(
+        &self,
+        mut settings: AppSettingsDocument,
+    ) -> ServiceResult<AppSettingsSnapshot> {
+        let (autostart_enabled, autostart_error) = match self.autostart.is_enabled() {
+            Ok(enabled) => {
+                settings.launch_at_login = enabled;
+                (enabled, None)
+            }
+            Err(error) => (settings.launch_at_login, Some(error.to_string())),
+        };
+        Ok(AppSettingsSnapshot {
+            settings,
+            settings_path: display_path(&self.settings_path()?)?,
+            autostart_enabled,
+            autostart_error,
+        })
+    }
+
+    fn load_settings(&self) -> ServiceResult<AppSettingsDocument> {
+        let path = self.settings_path()?;
+        match read_text_if_exists(&path)? {
+            Some(text) => {
+                let mut settings: AppSettingsDocument = serde_json::from_str(&text)?;
+                settings.version = APP_SETTINGS_VERSION;
+                validate_app_settings(&settings)?;
+                Ok(settings)
+            }
+            None => Ok(AppSettingsDocument::default()),
+        }
+    }
+
+    fn settings_path(&self) -> ServiceResult<PathBuf> {
+        Ok(self.paths.app_config_dir()?.join("settings.json"))
+    }
 }
 
 impl<V> CredentialRegistry<V>
@@ -2689,6 +2832,16 @@ fn kind_sort_key(kind: &CallAnalyticsKind) -> u8 {
     }
 }
 
+fn validate_app_settings(settings: &AppSettingsDocument) -> ServiceResult<()> {
+    const SUPPORTED_REFRESH_INTERVALS: &[u32] = &[30, 60, 180, 300, 600, 900, 1800, 3600, 0];
+    if !SUPPORTED_REFRESH_INTERVALS.contains(&settings.auto_refresh_interval_secs) {
+        return Err(ServiceError::InvalidRequest(
+            "auto_refresh_interval_secs is not supported",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_credential_request(request: &UpsertCredentialRequest) -> ServiceResult<()> {
     if request.provider_id.trim().is_empty() {
         return Err(ServiceError::InvalidRequest(
@@ -2869,6 +3022,57 @@ mod tests {
         fn supported_kinds(&self) -> Vec<CredentialKind> {
             vec![CredentialKind::ApiKey, CredentialKind::Token]
         }
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct MemoryAutostart {
+        enabled: Arc<Mutex<bool>>,
+    }
+
+    impl AutostartManager for MemoryAutostart {
+        fn is_enabled(&self) -> PlatformResult<bool> {
+            Ok(*self.enabled.lock().expect("autostart lock"))
+        }
+
+        fn set_enabled(&self, enabled: bool) -> PlatformResult<()> {
+            *self.enabled.lock().expect("autostart lock") = enabled;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn app_settings_persist_and_sync_autostart() {
+        let temp = TempDir::new().expect("tempdir");
+        let autostart = MemoryAutostart::default();
+        let service = AppSettingsService::with_autostart(
+            TestPaths::new(temp.path().to_path_buf()),
+            autostart.clone(),
+        );
+
+        let initial = service.snapshot().expect("settings snapshot");
+        assert_eq!(initial.settings.theme_mode, ThemeMode::System);
+        assert!(!initial.settings.launch_at_login);
+        assert!(initial.settings_path.ends_with("settings.json"));
+
+        let mut next = initial.settings;
+        next.theme_mode = ThemeMode::Dark;
+        next.language = AppLanguage::Zh;
+        next.proxy_auto_restore_on_launch = true;
+        next.launch_at_login = true;
+        let saved = service.save(next).expect("save settings");
+        assert!(saved.autostart_enabled);
+        assert_eq!(saved.settings.theme_mode, ThemeMode::Dark);
+        assert!(*autostart.enabled.lock().expect("autostart lock"));
+
+        let stored = fs::read_to_string(
+            temp.path()
+                .join("appdata")
+                .join("AIUsage")
+                .join("settings.json"),
+        )
+        .expect("settings json");
+        assert!(stored.contains("\"themeMode\": \"dark\""));
+        assert!(stored.contains("\"language\": \"zh\""));
     }
 
     #[test]
