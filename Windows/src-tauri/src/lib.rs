@@ -2,10 +2,10 @@ use aiusage_tauri::{
     activate_claude_config, activate_codex_config, activate_opencode_config,
     build_phase_a_snapshot, credential_summaries, delete_credential, managed_config_statuses,
     restore_claude_config, restore_codex_config, restore_opencode_config, save_credential,
-    start_proxy_runtime, stop_proxy_runtime, ClaudeActivationRequest, CodexActivationRequest,
-    CredentialSummary, DesktopSnapshot, ManagedConfigStatus, OpenCodeActivationRequest,
-    ProxyHealth, ProxyRuntimeConfig, ProxyTrack, ProxyUsageArchiveSummary, ProxyUsageStats,
-    UpsertCredentialRequest,
+    start_proxy_runtime, stop_proxy_runtime, CallAnalyticsInventorySnapshot,
+    ClaudeActivationRequest, CodexActivationRequest, CredentialSummary, DesktopSnapshot,
+    ManagedConfigStatus, OpenCodeActivationRequest, ProxyHealth, ProxyRuntimeConfig, ProxyTrack,
+    ProxyUsageArchiveSummary, ProxyUsageStats, UpsertCredentialRequest,
 };
 
 #[tauri::command]
@@ -31,6 +31,11 @@ fn proxy_usage_archives() -> Result<Vec<ProxyUsageArchiveSummary>, String> {
 #[tauri::command]
 fn proxy_usage_stats() -> Result<ProxyUsageStats, String> {
     aiusage_tauri::proxy_usage_stats().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn call_analytics_inventory() -> Result<CallAnalyticsInventorySnapshot, String> {
+    aiusage_tauri::call_analytics_inventory().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -110,6 +115,7 @@ pub fn run() {
             proxy_statuses,
             proxy_usage_archives,
             proxy_usage_stats,
+            call_analytics_inventory,
             credentials,
             save_provider_credential,
             delete_provider_credential,

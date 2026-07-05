@@ -159,8 +159,11 @@ The UI may be implemented in React/TypeScript, but the state machine should mirr
 | Caches | `%LOCALAPPDATA%\AIUsage\cache\*` |
 | TLS CA/key material | `%LOCALAPPDATA%\AIUsage\tls\*`, DPAPI-protected where appropriate |
 | Codex config | Native target: `%USERPROFILE%\.codex\config.toml`; alternate `CODEX_HOME` supported |
+| Codex call sessions | `%USERPROFILE%\.codex\sessions\**\*.json[l]` and `%USERPROFILE%\.codex\archived_sessions\**\*.json[l]` |
 | Claude Code config | Native target: `%USERPROFILE%\.claude\settings.json`; WSL target opt-in |
+| Claude Call Analytics config/session inventory | `%USERPROFILE%\.claude.json`, `%USERPROFILE%\.claude\settings.json`, and `%USERPROFILE%\.claude\projects\**\*.jsonl` |
 | OpenCode config | Native Windows location if defined by upstream; fallback `%USERPROFILE%\.config\opencode\opencode.json[c]`; explicit override supported |
+| OpenCode call database inventory | `%LOCALAPPDATA%\opencode\opencode.db`, `%USERPROFILE%\.local\share\opencode\opencode.db`, `$XDG_DATA_HOME\opencode\opencode.db`, plus config-dir fallback |
 
 ## Config Takeover Semantics
 

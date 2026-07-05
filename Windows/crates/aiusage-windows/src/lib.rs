@@ -61,6 +61,10 @@ impl WindowsAppPaths {
 }
 
 impl AppPaths for WindowsAppPaths {
+    fn user_home(&self) -> PlatformResult<PathBuf> {
+        Self::user_profile()
+    }
+
     fn app_config_dir(&self) -> PlatformResult<PathBuf> {
         Ok(Self::env_path("APPDATA")?.join("AIUsage"))
     }

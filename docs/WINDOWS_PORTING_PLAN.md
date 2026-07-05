@@ -62,7 +62,7 @@ Deliverables:
 - API providers and distribution model.
 - Pricing/currency conversion.
 - Usage archive readers/writers.
-- Call analytics inventory and aggregation.
+- Call analytics inventory and aggregation. The Windows inventory foundation now detects native Claude/Codex/OpenCode configs, session stores, user skill roots, and configured MCP servers; event aggregation is the next parity step.
 
 Completion criteria:
 
@@ -193,7 +193,7 @@ Completion criteria:
 
 | Question | Owner/action |
 | --- | --- |
-| Which upstream Windows config paths are official for OpenCode and Claude Code native installs? | Confirm against upstream docs and real installs before implementation |
+| Which upstream Windows config paths are official for OpenCode and Claude Code native installs? | Inventory currently covers `%USERPROFILE%\.claude.json`, `%USERPROFILE%\.claude\settings.json`, `%USERPROFILE%\.config\opencode\opencode.json[c]`, `%LOCALAPPDATA%\opencode\opencode.db`, and `%USERPROFILE%\.local\share\opencode\opencode.db`; confirm against real installs before release |
 | Does Warp expose Windows usage/account data comparable to macOS defaults? | Research provider data source before committing full parity |
 | Should the first Windows release include arm64? | Decide after x64 release pipeline is stable |
 | Should certificate trust default to user store only? | Prototype UX and test with target CLIs |

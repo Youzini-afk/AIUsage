@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     ffi::OsString,
     fs, io,
     path::{Path, PathBuf},
@@ -176,6 +177,45 @@ pub struct ProxyUsageStats {
     pub by_track: Vec<ProxyUsageTrackBreakdown>,
     pub by_model: Vec<ProxyUsageModelBreakdown>,
     pub updated_at_epoch_ms: Option<u128>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CallAnalyticsSource {
+    Claude,
+    Codex,
+    OpenCode,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallAnalyticsPathStatus {
+    pub path: String,
+    pub exists: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallAnalyticsInventorySourceStatus {
+    pub source: CallAnalyticsSource,
+    pub available: bool,
+    pub config_paths: Vec<CallAnalyticsPathStatus>,
+    pub session_paths: Vec<CallAnalyticsPathStatus>,
+    pub skill_paths: Vec<CallAnalyticsPathStatus>,
+    pub config_file_count: usize,
+    pub session_file_count: usize,
+    pub skill_count: usize,
+    pub mcp_server_count: usize,
+    pub skill_names: Vec<String>,
+    pub mcp_server_names: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallAnalyticsInventorySnapshot {
+    pub generated_at_epoch_ms: u128,
+    pub sources: Vec<CallAnalyticsInventorySourceStatus>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -473,6 +513,148 @@ where
         self.permissions
             .restrict_current_user(path)
             .map_err(ServiceError::Platform)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CallAnalyticsInventoryService<P> {
+    paths: P,
+}
+
+impl<P> CallAnalyticsInventoryService<P>
+where
+    P: AppPaths,
+{
+    pub fn new(paths: P) -> Self {
+        Self { paths }
+    }
+
+    pub fn snapshot(&self) -> ServiceResult<CallAnalyticsInventorySnapshot> {
+        Ok(CallAnalyticsInventorySnapshot {
+            generated_at_epoch_ms: epoch_ms(),
+            sources: vec![
+                self.claude_inventory()?,
+                self.codex_inventory()?,
+                self.opencode_inventory()?,
+            ],
+        })
+    }
+
+    fn claude_inventory(&self) -> ServiceResult<CallAnalyticsInventorySourceStatus> {
+        let home = self.paths.user_home()?;
+        let claude_home = self.paths.claude_home()?;
+        let configs = vec![
+            (home.join(".claude.json"), McpConfigFormat::Json),
+            (claude_home.join("settings.json"), McpConfigFormat::Json),
+        ];
+        let skill_roots = vec![claude_home.join("skills")];
+        let session_roots = vec![claude_home.join("projects")];
+        self.inventory_for_source(
+            CallAnalyticsSource::Claude,
+            configs,
+            session_roots,
+            SessionProbeKind::JsonLines,
+            skill_roots,
+        )
+    }
+
+    fn codex_inventory(&self) -> ServiceResult<CallAnalyticsInventorySourceStatus> {
+        let codex_home = self.paths.codex_home()?;
+        let configs = vec![(codex_home.join("config.toml"), McpConfigFormat::CodexToml)];
+        let skill_roots = vec![codex_home.join("skills")];
+        let session_roots = vec![
+            codex_home.join("sessions"),
+            codex_home.join("archived_sessions"),
+        ];
+        self.inventory_for_source(
+            CallAnalyticsSource::Codex,
+            configs,
+            session_roots,
+            SessionProbeKind::JsonLines,
+            skill_roots,
+        )
+    }
+
+    fn opencode_inventory(&self) -> ServiceResult<CallAnalyticsInventorySourceStatus> {
+        let config_dir = self.paths.opencode_config_dir()?;
+        let configs = vec![
+            (config_dir.join("opencode.json"), McpConfigFormat::Json),
+            (config_dir.join("opencode.jsonc"), McpConfigFormat::Json),
+        ];
+        let skill_roots = vec![config_dir.join("skills")];
+        let session_paths = self
+            .opencode_data_dirs()?
+            .into_iter()
+            .map(|dir| dir.join("opencode.db"))
+            .collect();
+        self.inventory_for_source(
+            CallAnalyticsSource::OpenCode,
+            configs,
+            session_paths,
+            SessionProbeKind::ExactFile,
+            skill_roots,
+        )
+    }
+
+    fn inventory_for_source(
+        &self,
+        source: CallAnalyticsSource,
+        configs: Vec<(PathBuf, McpConfigFormat)>,
+        session_paths: Vec<PathBuf>,
+        session_kind: SessionProbeKind,
+        skill_roots: Vec<PathBuf>,
+    ) -> ServiceResult<CallAnalyticsInventorySourceStatus> {
+        let mut warnings = Vec::new();
+        let mut skill_names = BTreeSet::new();
+        for root in &skill_roots {
+            collect_skill_names(root, &mut skill_names, &mut warnings);
+        }
+
+        let mut mcp_server_names = BTreeSet::new();
+        for (path, format) in &configs {
+            collect_mcp_names(path, *format, &mut mcp_server_names, &mut warnings);
+        }
+
+        let config_paths = path_statuses(configs.iter().map(|(path, _)| path))?;
+        let session_path_statuses = path_statuses(session_paths.iter())?;
+        let skill_paths = path_statuses(skill_roots.iter())?;
+        let config_file_count = config_paths.iter().filter(|status| status.exists).count();
+        let session_file_count = count_session_files(&session_paths, session_kind, &mut warnings);
+
+        Ok(CallAnalyticsInventorySourceStatus {
+            source,
+            available: config_file_count > 0 || session_file_count > 0 || !skill_names.is_empty(),
+            config_paths,
+            session_paths: session_path_statuses,
+            skill_paths,
+            config_file_count,
+            session_file_count,
+            skill_count: skill_names.len(),
+            mcp_server_count: mcp_server_names.len(),
+            skill_names: skill_names.into_iter().collect(),
+            mcp_server_names: mcp_server_names.into_iter().collect(),
+            warnings,
+        })
+    }
+
+    fn opencode_data_dirs(&self) -> ServiceResult<Vec<PathBuf>> {
+        let mut dirs = Vec::new();
+        if let Some(xdg_data_home) = std::env::var_os("XDG_DATA_HOME") {
+            push_unique_path(&mut dirs, PathBuf::from(xdg_data_home).join("opencode"));
+        }
+        if let Some(local_data_root) = self.paths.app_data_dir()?.parent().map(Path::to_path_buf) {
+            push_unique_path(&mut dirs, local_data_root.join("opencode"));
+        }
+        push_unique_path(
+            &mut dirs,
+            self.paths
+                .user_home()?
+                .join(".local")
+                .join("share")
+                .join("opencode"),
+        );
+        push_unique_path(&mut dirs, self.paths.opencode_config_dir()?);
+        Ok(dirs)
     }
 }
 
@@ -925,6 +1107,266 @@ fn validate_opencode_node(node: &OpenCodeManagedNode) -> ServiceResult<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug)]
+enum McpConfigFormat {
+    Json,
+    CodexToml,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SessionProbeKind {
+    JsonLines,
+    ExactFile,
+}
+
+const SKILL_MARKER_FILENAME: &str = "SKILL.md";
+const SKIP_SCAN_DIRECTORIES: &[&str] = &["node_modules", ".git", "Pods", "dist", "build", "target"];
+
+fn collect_skill_names(root: &Path, names: &mut BTreeSet<String>, warnings: &mut Vec<String>) {
+    let Ok(metadata) = fs::metadata(root) else {
+        return;
+    };
+    if !metadata.is_dir() {
+        return;
+    }
+    collect_skill_names_in_dir(root, names, warnings);
+}
+
+fn collect_skill_names_in_dir(
+    directory: &Path,
+    names: &mut BTreeSet<String>,
+    warnings: &mut Vec<String>,
+) {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) => {
+            warnings.push(format!("{}: {}", directory.display(), error));
+            return;
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                warnings.push(format!("{}: {}", directory.display(), error));
+                continue;
+            }
+        };
+        let path = entry.path();
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if SKIP_SCAN_DIRECTORIES.contains(&file_name.as_str()) {
+            continue;
+        }
+
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                warnings.push(format!("{}: {}", path.display(), error));
+                continue;
+            }
+        };
+
+        if file_type.is_dir() {
+            collect_skill_names_in_dir(&path, names, warnings);
+        } else if file_type.is_file() && file_name == SKILL_MARKER_FILENAME {
+            if let Some(name) = path
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+            {
+                names.insert(name.to_string());
+            }
+        }
+    }
+}
+
+fn collect_mcp_names(
+    path: &Path,
+    format: McpConfigFormat,
+    names: &mut BTreeSet<String>,
+    warnings: &mut Vec<String>,
+) {
+    let text = match read_text_if_exists(path) {
+        Ok(Some(text)) => text,
+        Ok(None) => return,
+        Err(error) => {
+            warnings.push(format!("{}: {}", path.display(), error));
+            return;
+        }
+    };
+
+    match format {
+        McpConfigFormat::Json => match parse_json_or_jsonc(&text) {
+            Ok(value) => collect_json_mcp_names(&value, names),
+            Err(error) => warnings.push(format!("{}: {}", path.display(), error)),
+        },
+        McpConfigFormat::CodexToml => collect_codex_toml_mcp_names(&text, names),
+    }
+}
+
+fn collect_json_mcp_names(value: &Value, names: &mut BTreeSet<String>) {
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    add_json_mcp_server_keys(object, names);
+
+    if let Some(projects) = object.get("projects").and_then(Value::as_object) {
+        for project in projects.values().filter_map(Value::as_object) {
+            add_json_mcp_server_keys(project, names);
+        }
+    }
+}
+
+fn add_json_mcp_server_keys(object: &serde_json::Map<String, Value>, names: &mut BTreeSet<String>) {
+    for key in ["mcpServers", "mcp", "mcp_servers"] {
+        if let Some(servers) = object.get(key).and_then(Value::as_object) {
+            for name in servers.keys().map(String::as_str).map(str::trim) {
+                if !name.is_empty() {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+    }
+}
+
+fn collect_codex_toml_mcp_names(text: &str, names: &mut BTreeSet<String>) {
+    let prefix = "mcp_servers.";
+    for raw_line in text.lines() {
+        let line = raw_line.trim();
+        if !line.starts_with('[') || line.starts_with("[[") {
+            continue;
+        }
+        let Some(close) = line.find(']') else {
+            continue;
+        };
+        let inner = &line[1..close];
+        let Some(rest) = inner.strip_prefix(prefix) else {
+            continue;
+        };
+        if let Some(name) = first_toml_key_segment(rest) {
+            let trimmed = name.trim();
+            if !trimmed.is_empty() {
+                names.insert(trimmed.to_string());
+            }
+        }
+    }
+}
+
+fn first_toml_key_segment(raw: &str) -> Option<String> {
+    let raw = raw.trim_start();
+    let mut chars = raw.chars();
+    match chars.next()? {
+        quote @ ('\'' | '"') => {
+            let rest = &raw[quote.len_utf8()..];
+            rest.find(quote).map(|end| rest[..end].to_string())
+        }
+        _ => raw
+            .split('.')
+            .next()
+            .map(str::trim)
+            .filter(|segment| !segment.is_empty())
+            .map(ToOwned::to_owned),
+    }
+}
+
+fn path_statuses<'a>(
+    paths: impl IntoIterator<Item = &'a PathBuf>,
+) -> ServiceResult<Vec<CallAnalyticsPathStatus>> {
+    paths
+        .into_iter()
+        .map(|path| {
+            Ok(CallAnalyticsPathStatus {
+                path: display_path(path)?,
+                exists: path.exists(),
+            })
+        })
+        .collect()
+}
+
+fn count_session_files(
+    paths: &[PathBuf],
+    kind: SessionProbeKind,
+    warnings: &mut Vec<String>,
+) -> usize {
+    match kind {
+        SessionProbeKind::JsonLines => paths
+            .iter()
+            .map(|path| count_matching_files(path, &["jsonl", "json"], warnings))
+            .sum(),
+        SessionProbeKind::ExactFile => paths.iter().filter(|path| path.is_file()).count(),
+    }
+}
+
+fn count_matching_files(root: &Path, extensions: &[&str], warnings: &mut Vec<String>) -> usize {
+    let Ok(metadata) = fs::metadata(root) else {
+        return 0;
+    };
+    if metadata.is_file() {
+        return file_extension_matches(root, extensions) as usize;
+    }
+    if !metadata.is_dir() {
+        return 0;
+    }
+
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) => {
+            warnings.push(format!("{}: {}", root.display(), error));
+            return 0;
+        }
+    };
+
+    let mut count = 0;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                warnings.push(format!("{}: {}", root.display(), error));
+                continue;
+            }
+        };
+        let path = entry.path();
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if SKIP_SCAN_DIRECTORIES.contains(&file_name.as_str()) {
+            continue;
+        }
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                warnings.push(format!("{}: {}", path.display(), error));
+                continue;
+            }
+        };
+
+        if file_type.is_dir() {
+            count += count_matching_files(&path, extensions, warnings);
+        } else if file_type.is_file() && file_extension_matches(&path, extensions) {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn file_extension_matches(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            extensions
+                .iter()
+                .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        })
+        .unwrap_or(false)
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
 fn validate_credential_request(request: &UpsertCredentialRequest) -> ServiceResult<()> {
     if request.provider_id.trim().is_empty() {
         return Err(ServiceError::InvalidRequest(
@@ -1053,6 +1495,10 @@ mod tests {
     }
 
     impl AppPaths for TestPaths {
+        fn user_home(&self) -> PlatformResult<PathBuf> {
+            Ok(self.root.clone())
+        }
+
         fn app_config_dir(&self) -> PlatformResult<PathBuf> {
             Ok(self.root.join("appdata").join("AIUsage"))
         }
@@ -1278,6 +1724,99 @@ mod tests {
     }
 
     #[test]
+    fn call_analytics_inventory_scans_cli_configs_skills_and_sessions() {
+        let temp = TempDir::new().expect("tempdir");
+        let root = temp.path();
+
+        let claude_skill = root.join(".claude").join("skills").join("briefing");
+        fs::create_dir_all(&claude_skill).expect("claude skill dir");
+        fs::write(claude_skill.join("SKILL.md"), "# briefing").expect("claude skill");
+        let claude_project = root.join(".claude").join("projects").join("workspace");
+        fs::create_dir_all(&claude_project).expect("claude project dir");
+        fs::write(claude_project.join("session.jsonl"), "{}\n").expect("claude session");
+        fs::write(
+            root.join(".claude.json"),
+            r#"{"projects":{"E:\\repo":{"mcpServers":{"fs":{},"git":{}}}}}"#,
+        )
+        .expect("claude config");
+
+        let codex_home = root.join(".codex");
+        fs::create_dir_all(codex_home.join("skills").join("review")).expect("codex skill dir");
+        fs::write(
+            codex_home.join("skills").join("review").join("SKILL.md"),
+            "# review",
+        )
+        .expect("codex skill");
+        fs::create_dir_all(codex_home.join("sessions").join("2026")).expect("codex sessions");
+        fs::create_dir_all(codex_home.join("archived_sessions")).expect("codex archived sessions");
+        fs::write(
+            codex_home.join("sessions").join("2026").join("one.jsonl"),
+            "{}\n",
+        )
+        .expect("codex session");
+        fs::write(codex_home.join("archived_sessions").join("two.json"), "{}")
+            .expect("codex archived session");
+        fs::write(
+            codex_home.join("config.toml"),
+            "[mcp_servers.demo]\ncommand = \"node\"\n[mcp_servers.\"quoted.name\".env]\nA = \"B\"\n",
+        )
+        .expect("codex config");
+
+        let opencode_config = root.join(".config").join("opencode");
+        fs::create_dir_all(opencode_config.join("skills").join("plan")).expect("opencode skill");
+        fs::write(
+            opencode_config.join("skills").join("plan").join("SKILL.md"),
+            "# plan",
+        )
+        .expect("opencode skill");
+        fs::write(
+            opencode_config.join("opencode.jsonc"),
+            "{ // comment\n \"mcp\": {\"context7\": {},},\n}\n",
+        )
+        .expect("opencode config");
+        let opencode_data = root.join("localappdata").join("opencode");
+        fs::create_dir_all(&opencode_data).expect("opencode data dir");
+        fs::write(opencode_data.join("opencode.db"), "").expect("opencode db");
+
+        let service = CallAnalyticsInventoryService::new(TestPaths::new(root.to_path_buf()));
+        let snapshot = service.snapshot().expect("inventory snapshot");
+        assert_eq!(snapshot.sources.len(), 3);
+
+        let claude = inventory_source(&snapshot, CallAnalyticsSource::Claude);
+        assert!(claude.available);
+        assert_eq!(claude.session_file_count, 1);
+        assert_eq!(claude.skill_names, vec!["briefing"]);
+        assert_eq!(claude.mcp_server_names, vec!["fs", "git"]);
+
+        let codex = inventory_source(&snapshot, CallAnalyticsSource::Codex);
+        assert_eq!(codex.session_file_count, 2);
+        assert_eq!(codex.skill_names, vec!["review"]);
+        assert_eq!(codex.mcp_server_names, vec!["demo", "quoted.name"]);
+
+        let opencode = inventory_source(&snapshot, CallAnalyticsSource::OpenCode);
+        assert_eq!(opencode.session_file_count, 1);
+        assert_eq!(opencode.skill_names, vec!["plan"]);
+        assert_eq!(opencode.mcp_server_names, vec!["context7"]);
+        assert!(opencode.warnings.is_empty());
+    }
+
+    #[test]
+    fn call_analytics_inventory_reports_parse_warnings_without_failing() {
+        let temp = TempDir::new().expect("tempdir");
+        let config_dir = temp.path().join(".config").join("opencode");
+        fs::create_dir_all(&config_dir).expect("config dir");
+        fs::write(config_dir.join("opencode.json"), "{ broken").expect("broken config");
+
+        let service = CallAnalyticsInventoryService::new(TestPaths::new(temp.path().to_path_buf()));
+        let snapshot = service.snapshot().expect("inventory snapshot");
+        let opencode = inventory_source(&snapshot, CallAnalyticsSource::OpenCode);
+        assert!(opencode.available);
+        assert_eq!(opencode.config_file_count, 1);
+        assert_eq!(opencode.mcp_server_count, 0);
+        assert_eq!(opencode.warnings.len(), 1);
+    }
+
+    #[test]
     fn credential_registry_stores_summaries_without_exposing_secret() {
         let registry = CredentialRegistry::new(MemoryVault::default());
         let summary = registry
@@ -1359,6 +1898,17 @@ mod tests {
 
         let restored = service.restore_claude(None).expect("restore");
         assert!(!restored.config_exists);
+    }
+
+    fn inventory_source(
+        snapshot: &CallAnalyticsInventorySnapshot,
+        source: CallAnalyticsSource,
+    ) -> &CallAnalyticsInventorySourceStatus {
+        snapshot
+            .sources
+            .iter()
+            .find(|row| row.source == source)
+            .expect("inventory source")
     }
 
     fn node() -> OpenCodeManagedNode {

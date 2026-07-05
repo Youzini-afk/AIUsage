@@ -63,6 +63,33 @@ type ProxyUsageStats = {
   updatedAtEpochMs: number | null;
 };
 
+type CallAnalyticsSource = "claude" | "codex" | "openCode";
+
+type CallAnalyticsPathStatus = {
+  path: string;
+  exists: boolean;
+};
+
+type CallAnalyticsInventorySourceStatus = {
+  source: CallAnalyticsSource;
+  available: boolean;
+  configPaths: CallAnalyticsPathStatus[];
+  sessionPaths: CallAnalyticsPathStatus[];
+  skillPaths: CallAnalyticsPathStatus[];
+  configFileCount: number;
+  sessionFileCount: number;
+  skillCount: number;
+  mcpServerCount: number;
+  skillNames: string[];
+  mcpServerNames: string[];
+  warnings: string[];
+};
+
+type CallAnalyticsInventorySnapshot = {
+  generatedAtEpochMs: number;
+  sources: CallAnalyticsInventorySourceStatus[];
+};
+
 type CredentialSummary = {
   id: string;
   providerId: string;
@@ -154,11 +181,23 @@ function proxyTrackLabel(track: ProxyHealth["track"]): string {
   }
 }
 
+function callSourceLabel(source: CallAnalyticsSource): string {
+  switch (source) {
+    case "claude":
+      return "Claude Code";
+    case "openCode":
+      return "OpenCode";
+    default:
+      return "Codex";
+  }
+}
+
 export function App() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>(fallbackSnapshot);
   const [proxyHealth, setProxyHealth] = useState<ProxyHealth[]>([]);
   const [proxyArchives, setProxyArchives] = useState<ProxyUsageArchiveSummary[]>([]);
   const [proxyUsageStats, setProxyUsageStats] = useState<ProxyUsageStats | null>(null);
+  const [callInventory, setCallInventory] = useState<CallAnalyticsInventorySnapshot | null>(null);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [activeSection, setActiveSection] = useState("dashboard");
 
@@ -175,6 +214,9 @@ export function App() {
     invoke<ProxyUsageStats>("proxy_usage_stats")
       .then(setProxyUsageStats)
       .catch(() => setProxyUsageStats(null));
+    invoke<CallAnalyticsInventorySnapshot>("call_analytics_inventory")
+      .then(setCallInventory)
+      .catch(() => setCallInventory(null));
     invoke<CredentialSummary[]>("credentials")
       .then(setCredentials)
       .catch(() => setCredentials([]));
@@ -194,6 +236,55 @@ export function App() {
       proxyUsageStats.totals.cacheReadTokens +
       proxyUsageStats.totals.cacheWriteTokens
     : 0;
+  const inventoryRows =
+    callInventory?.sources ??
+    ([
+      {
+        source: "claude",
+        available: false,
+        configPaths: [],
+        sessionPaths: [],
+        skillPaths: [],
+        configFileCount: 0,
+        sessionFileCount: 0,
+        skillCount: 0,
+        mcpServerCount: 0,
+        skillNames: [],
+        mcpServerNames: [],
+        warnings: []
+      },
+      {
+        source: "codex",
+        available: false,
+        configPaths: [],
+        sessionPaths: [],
+        skillPaths: [],
+        configFileCount: 0,
+        sessionFileCount: 0,
+        skillCount: 0,
+        mcpServerCount: 0,
+        skillNames: [],
+        mcpServerNames: [],
+        warnings: []
+      },
+      {
+        source: "openCode",
+        available: false,
+        configPaths: [],
+        sessionPaths: [],
+        skillPaths: [],
+        configFileCount: 0,
+        sessionFileCount: 0,
+        skillCount: 0,
+        mcpServerCount: 0,
+        skillNames: [],
+        mcpServerNames: [],
+        warnings: []
+      }
+    ] satisfies CallAnalyticsInventorySourceStatus[]);
+  const availableCallSources = inventoryRows.filter((row) => row.available).length;
+  const detectedSkills = inventoryRows.reduce((total, row) => total + row.skillCount, 0);
+  const detectedMcpServers = inventoryRows.reduce((total, row) => total + row.mcpServerCount, 0);
 
   return (
     <main className="app-shell">
@@ -270,6 +361,20 @@ export function App() {
             <strong>{totalProxyTokens.toLocaleString()}</strong>
           </section>
           <section className="stat-tile">
+            <span>Call sources</span>
+            <strong>
+              {availableCallSources}/{inventoryRows.length}
+            </strong>
+          </section>
+          <section className="stat-tile">
+            <span>Skills detected</span>
+            <strong>{detectedSkills.toLocaleString()}</strong>
+          </section>
+          <section className="stat-tile">
+            <span>MCP servers</span>
+            <strong>{detectedMcpServers.toLocaleString()}</strong>
+          </section>
+          <section className="stat-tile">
             <span>Stored credentials</span>
             <strong>{credentials.length}</strong>
           </section>
@@ -293,6 +398,38 @@ export function App() {
                 <span className={`status ${surface.status}`}>{statusLabel(surface.status)}</span>
               </article>
             ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Local inventory</p>
+              <h3>Call Analytics sources</h3>
+            </div>
+            <Activity size={18} />
+          </div>
+          <div className="surface-list">
+            {inventoryRows.map((row) => {
+              const stateClass = row.warnings.length ? "blocked" : row.available ? "complete" : "planned";
+              const stateLabel = row.warnings.length ? "Warning" : row.available ? "Detected" : "No data";
+              return (
+                <article key={row.source} className="surface-row inventory-row">
+                  <div>
+                    <strong>{callSourceLabel(row.source)}</strong>
+                    <span>
+                      {row.mcpServerCount.toLocaleString()} MCP · {row.skillCount.toLocaleString()} skills ·{" "}
+                      {row.sessionFileCount.toLocaleString()} session files
+                    </span>
+                    <span>
+                      {row.configFileCount}/{row.configPaths.length || 1} config files ·{" "}
+                      {row.warnings.length.toLocaleString()} warnings
+                    </span>
+                  </div>
+                  <span className={`status ${stateClass}`}>{stateLabel}</span>
+                </article>
+              );
+            })}
           </div>
         </section>
 

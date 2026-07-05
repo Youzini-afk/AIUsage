@@ -14,7 +14,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | OpenCode Proxy | Shipped | Full parity | Native/fallback config path plus JSON/JSONC takeover |
 | Global Proxy | Shipped | Full parity | Same fixed-entry hot-switch model |
 | Usage Stats | Shipped | Full parity | Same archive semantics and cost freezing |
-| Call Analytics | Shipped | Full parity | Windows paths and installed-tool discovery required |
+| Call Analytics | Shipped | Full parity | Native Windows inventory now detects Claude/Codex/OpenCode configs, session stores, skills, and MCP servers; event aggregation remains in progress |
 | Inbox | Shipped | Full parity | Same message/read-state model |
 | Settings | Shipped | Full parity | Windows-specific autostart, tray, paths, update, certificates |
 | Tray/menu bar | Shipped | Full parity | Windows tray, context menu, background behavior |
@@ -33,6 +33,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | Proxy runtime | Async Rust passthrough supervisor starts/stops local listeners, exposes health through Tauri, validates client keys, normalizes `/v1` upstream paths, injects upstream auth, streams upstream responses, emits request/usage events, parses OpenAI/Anthropic usage shapes, and surfaces four-track health in the Windows UI |
 | Usage archive | Proxy usage events are persisted per track under `%APPDATA%\AIUsage\usage-archive\proxy-usage-<track>-v1.json`, permission-tightened through the Windows file guard, and summarized in the Windows UI |
 | Usage stats | Proxy usage archives aggregate into request/input/output/cache token totals with track/model breakdowns exposed through Tauri and displayed in the Windows UI |
+| Call Analytics inventory | Windows service scans `%USERPROFILE%\.claude.json`, `%USERPROFILE%\.claude\settings.json`, `%USERPROFILE%\.claude\projects`, `%USERPROFILE%\.codex\config.toml`, `%USERPROFILE%\.codex\sessions`, `%USERPROFILE%\.codex\archived_sessions`, `%USERPROFILE%\.config\opencode\opencode.json[c]`, OpenCode data DB candidates, and user skill roots; results are exposed through Tauri and summarized in the Windows UI |
 | Credential registry | Structured provider credentials are stored in Windows Credential Manager/DPAPI through the platform vault, exposed as secret-free summaries through Tauri, and counted in the Windows UI |
 | Packaging | Windows release workflow builds NSIS and MSI bundles, optionally signs artifacts with SignTool, emits SHA256 checksums, uploads artifacts, and publishes tag release assets |
 
@@ -52,7 +53,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | MiniMax | Full | API key/subscription key storage and refresh |
 | Claude Code local usage | Full | Windows `.claude` paths, logs, managed settings, proxy archive |
 | Codex cost/local usage | Full | Native and WSL session log discovery with explicit target |
-| OpenCode local usage | Full | Windows opencode DB path discovery and SQLite access |
+| OpenCode local usage | Full | Windows OpenCode DB path discovery foundation is present; SQLite event/cost reader still required for full parity |
 
 ## Proxy Feature Matrix
 

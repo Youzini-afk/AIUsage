@@ -47,6 +47,7 @@ impl SystemProxySnapshot {
 }
 
 pub trait AppPaths {
+    fn user_home(&self) -> PlatformResult<PathBuf>;
     fn app_config_dir(&self) -> PlatformResult<PathBuf>;
     fn app_data_dir(&self) -> PlatformResult<PathBuf>;
     fn app_cache_dir(&self) -> PlatformResult<PathBuf>;
