@@ -28,6 +28,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi"],
+    "icon": ["icons/icon.ico"],
     "publisher": "AIUsage",
     "shortDescription": "AI usage dashboard and local proxy manager",
     "longDescription": "AIUsage monitors AI subscriptions, local usage, and proxy tracks on Windows."

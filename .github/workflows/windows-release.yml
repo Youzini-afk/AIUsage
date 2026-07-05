@@ -1,0 +1,154 @@
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    env:
+      WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      WINDOWS_TIMESTAMP_URL: http://timestamp.digicert.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $version = "${{ github.ref_name }}".TrimStart("v")
+          } else {
+            $package = Get-Content Windows/package.json -Raw | ConvertFrom-Json
+            $version = $package.version
+          }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$version"
+          "Resolved version: $version"
+
+      - name: Validate Windows version metadata
+        shell: pwsh
+        run: |
+          $expected = "${{ steps.version.outputs.version }}"
+          $package = Get-Content Windows/package.json -Raw | ConvertFrom-Json
+          $tauri = Get-Content Windows/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $cargoToml = Get-Content Windows/src-tauri/Cargo.toml -Raw
+          $cargoVersion = [regex]::Match($cargoToml, '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+
+          "package.json:      $($package.version)"
+          "tauri.conf.json:   $($tauri.version)"
+          "src-tauri Cargo:   $cargoVersion"
+          "expected:          $expected"
+
+          if ($package.version -ne $expected) { throw "Windows/package.json version mismatch" }
+          if ($tauri.version -ne $expected) { throw "Windows/src-tauri/tauri.conf.json version mismatch" }
+          if ($cargoVersion -ne $expected) { throw "Windows/src-tauri/Cargo.toml version mismatch" }
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.7.0 --activate
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install frontend dependencies
+        working-directory: Windows
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: Windows
+        run: pnpm build
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path Windows/Cargo.toml --all -- --check
+
+      - name: Lint Rust workspace
+        run: cargo clippy --manifest-path Windows/Cargo.toml --workspace --all-targets -- -D warnings
+
+      - name: Test Rust workspace
+        run: cargo test --manifest-path Windows/Cargo.toml --workspace
+
+      - name: Build Tauri bundles
+        working-directory: Windows
+        run: pnpm tauri build --bundles nsis,msi
+
+      - name: Sign Windows artifacts
+        if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
+        shell: pwsh
+        run: |
+          $certPath = Join-Path $env:RUNNER_TEMP "aiusage-windows-signing.pfx"
+          [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
+
+          $artifacts = @()
+          $artifacts += Get-ChildItem Windows/src-tauri/target/release -Filter "*.exe" -File -ErrorAction SilentlyContinue
+          $artifacts += Get-ChildItem Windows/src-tauri/target/release/bundle -Recurse -Include "*.exe","*.msi" -File
+          if ($artifacts.Count -eq 0) { throw "No Windows artifacts found to sign" }
+
+          foreach ($artifact in $artifacts) {
+            "Signing $($artifact.FullName)"
+            & signtool sign /fd SHA256 /f $certPath /p $env:WINDOWS_CERTIFICATE_PASSWORD /tr $env:WINDOWS_TIMESTAMP_URL /td SHA256 $artifact.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($artifact.FullName)" }
+            & signtool verify /pa /v $artifact.FullName
+            if ($LASTEXITCODE -ne 0) { throw "signtool verification failed for $($artifact.FullName)" }
+          }
+
+          Remove-Item -LiteralPath $certPath -Force
+
+      - name: Collect release artifacts
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $dist = "dist/windows"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+
+          $setup = Get-ChildItem Windows/src-tauri/target/release/bundle/nsis -Filter "*.exe" -File | Select-Object -First 1
+          $msi = Get-ChildItem Windows/src-tauri/target/release/bundle/msi -Filter "*.msi" -File | Select-Object -First 1
+          if ($null -eq $setup) { throw "NSIS setup.exe was not produced" }
+          if ($null -eq $msi) { throw "MSI was not produced" }
+
+          Copy-Item $setup.FullName "$dist/AIUsage-$version-windows-x64-setup.exe"
+          Copy-Item $msi.FullName "$dist/AIUsage-$version-windows-x64.msi"
+
+          Get-ChildItem $dist -File | ForEach-Object {
+            $hash = Get-FileHash $_.FullName -Algorithm SHA256
+            "$($hash.Hash.ToLowerInvariant())  $($_.Name)"
+          } | Set-Content "$dist/AIUsage-$version-windows-x64-SHA256SUMS.txt"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: AIUsage-${{ steps.version.outputs.version }}-Windows-x64
+          path: dist/windows/*
+          if-no-files-found: error
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: dist/windows/*
