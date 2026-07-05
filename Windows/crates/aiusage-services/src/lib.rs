@@ -101,6 +101,7 @@ pub enum ManagedConfigKind {
 pub enum ManagedConfigTargetKind {
     NativeWindows,
     CustomPath,
+    WslDistribution,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1587,6 +1588,31 @@ where
         ])
     }
 
+    pub fn wsl_statuses(
+        &self,
+        distribution_name: &str,
+        home_path: &str,
+    ) -> ServiceResult<Vec<ManagedConfigStatus>> {
+        let paths = wsl_managed_config_paths(distribution_name, home_path)?;
+        Ok(vec![
+            managed_config_status_or_warning(
+                ManagedConfigKind::Claude,
+                paths.claude_settings,
+                ManagedConfigTargetKind::WslDistribution,
+            )?,
+            managed_config_status_or_warning(
+                ManagedConfigKind::Codex,
+                paths.codex_config,
+                ManagedConfigTargetKind::WslDistribution,
+            )?,
+            managed_config_status_or_warning(
+                ManagedConfigKind::OpenCode,
+                paths.opencode_config,
+                ManagedConfigTargetKind::WslDistribution,
+            )?,
+        ])
+    }
+
     pub fn claude_status(
         &self,
         config_path: Option<PathBuf>,
@@ -1853,6 +1879,125 @@ where
 struct ResolvedTarget {
     path: PathBuf,
     target_kind: ManagedConfigTargetKind,
+}
+
+#[derive(Clone, Debug)]
+struct WslManagedConfigPaths {
+    claude_settings: PathBuf,
+    codex_config: PathBuf,
+    opencode_config: PathBuf,
+}
+
+fn wsl_managed_config_paths(
+    distribution_name: &str,
+    home_path: &str,
+) -> ServiceResult<WslManagedConfigPaths> {
+    let home = home_path.trim().trim_end_matches('/');
+    if home.is_empty() || !home.starts_with('/') {
+        return Err(ServiceError::InvalidRequest(
+            "WSL home path must be an absolute Linux path",
+        ));
+    }
+
+    let opencode_dir = wsl_unc_path(
+        distribution_name,
+        &join_linux_path(home, ".config/opencode"),
+    )?;
+    let opencode_jsonc = opencode_dir.join("opencode.jsonc");
+    let opencode_json = opencode_dir.join("opencode.json");
+
+    Ok(WslManagedConfigPaths {
+        claude_settings: wsl_unc_path(
+            distribution_name,
+            &join_linux_path(home, ".claude/settings.json"),
+        )?,
+        codex_config: wsl_unc_path(
+            distribution_name,
+            &join_linux_path(home, ".codex/config.toml"),
+        )?,
+        opencode_config: if opencode_jsonc.exists() {
+            opencode_jsonc
+        } else {
+            opencode_json
+        },
+    })
+}
+
+fn join_linux_path(base: &str, suffix: &str) -> String {
+    format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        suffix.trim_start_matches('/')
+    )
+}
+
+fn wsl_unc_path(distribution_name: &str, linux_path: &str) -> ServiceResult<PathBuf> {
+    let distribution = distribution_name.trim();
+    if distribution.is_empty() || distribution.contains('\\') || distribution.contains('/') {
+        return Err(ServiceError::InvalidRequest(
+            "WSL distribution name is invalid",
+        ));
+    }
+
+    let linux_path = linux_path.trim();
+    if !linux_path.starts_with('/') {
+        return Err(ServiceError::InvalidRequest(
+            "WSL path must be an absolute Linux path",
+        ));
+    }
+
+    let mut path = format!(r"\\wsl.localhost\{distribution}");
+    for segment in linux_path.split('/').filter(|segment| !segment.is_empty()) {
+        if matches!(segment, "." | "..") || segment.contains('\\') {
+            return Err(ServiceError::InvalidRequest(
+                "WSL path contains an invalid segment",
+            ));
+        }
+        path.push('\\');
+        path.push_str(segment);
+    }
+    Ok(PathBuf::from(path))
+}
+
+fn managed_config_status_or_warning(
+    kind: ManagedConfigKind,
+    path: PathBuf,
+    target_kind: ManagedConfigTargetKind,
+) -> ServiceResult<ManagedConfigStatus> {
+    let status = match kind {
+        ManagedConfigKind::Claude => claude_status_for_path(path.clone(), target_kind.clone()),
+        ManagedConfigKind::Codex => codex_status_for_path(path.clone(), target_kind.clone()),
+        ManagedConfigKind::OpenCode => opencode_status_for_path(path.clone(), target_kind.clone()),
+    };
+
+    match status {
+        Ok(status) => Ok(status),
+        Err(error) => managed_config_warning_status(kind, path, target_kind, error.to_string()),
+    }
+}
+
+fn managed_config_warning_status(
+    kind: ManagedConfigKind,
+    path: PathBuf,
+    target_kind: ManagedConfigTargetKind,
+    error_message: String,
+) -> ServiceResult<ManagedConfigStatus> {
+    let backup_path = backup_path_for(&path);
+    Ok(ManagedConfigStatus {
+        kind,
+        target_kind,
+        config_path: display_path(&path)?,
+        backup_path: display_path(&backup_path)?,
+        config_exists: false,
+        backup_exists: false,
+        managed: false,
+        uses_jsonc: path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.eq_ignore_ascii_case("jsonc"))
+            .unwrap_or(false),
+        parse_error: Some(error_message),
+    })
 }
 
 fn claude_status_for_path(
@@ -3750,6 +3895,22 @@ mod tests {
         let status = service.opencode_status(None).expect("status");
         assert!(status.parse_error.is_some());
         assert!(!status.managed);
+    }
+
+    #[test]
+    fn wsl_unc_path_converts_absolute_linux_paths() {
+        let path = wsl_unc_path("Ubuntu-22.04", "/home/zoe/.codex/config.toml").expect("wsl path");
+        assert_eq!(
+            path.to_string_lossy(),
+            r"\\wsl.localhost\Ubuntu-22.04\home\zoe\.codex\config.toml"
+        );
+    }
+
+    #[test]
+    fn wsl_unc_path_rejects_relative_and_parent_segments() {
+        assert!(wsl_unc_path("Ubuntu", "home/zoe").is_err());
+        assert!(wsl_unc_path("Ubuntu", "/home/zoe/../config.toml").is_err());
+        assert!(wsl_unc_path("Bad/Name", "/home/zoe").is_err());
     }
 
     #[test]

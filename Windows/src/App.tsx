@@ -100,7 +100,7 @@ type PlatformEnvironmentSnapshot = {
 
 type ManagedConfigKind = "claude" | "codex" | "openCode";
 
-type ManagedConfigTargetKind = "nativeWindows" | "customPath";
+type ManagedConfigTargetKind = "nativeWindows" | "customPath" | "wslDistribution";
 
 type ManagedConfigStatus = {
   kind: ManagedConfigKind;
@@ -417,6 +417,8 @@ function managedConfigTargetLabel(targetKind: ManagedConfigTargetKind): string {
   switch (targetKind) {
     case "customPath":
       return "Custom";
+    case "wslDistribution":
+      return "WSL";
     default:
       return "Native";
   }
@@ -457,6 +459,10 @@ function managedConfigRestoreCommand(kind: ManagedConfigKind): string {
     default:
       return "restore_codex_managed_config";
   }
+}
+
+function canRestoreManagedConfig(status: ManagedConfigStatus): boolean {
+  return status.targetKind !== "wslDistribution" && (status.managed || status.backupExists);
 }
 
 function updaterStateLabel(state: UpdaterState): string {
@@ -1208,7 +1214,7 @@ export function App() {
                     type="button"
                     title={`Restore ${managedConfigKindLabel(status.kind)}`}
                     aria-label={`Restore ${managedConfigKindLabel(status.kind)}`}
-                    disabled={managedConfigBusy === status.kind || (!status.managed && !status.backupExists)}
+                    disabled={managedConfigBusy === status.kind || !canRestoreManagedConfig(status)}
                     onClick={() => runManagedConfigRestore(status)}
                   >
                     <RotateCcw size={15} />

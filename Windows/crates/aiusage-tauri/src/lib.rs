@@ -279,7 +279,18 @@ pub fn delete_credential(id: String) -> Result<bool, ServiceError> {
 }
 
 pub fn managed_config_statuses() -> Result<Vec<ManagedConfigStatus>, ServiceError> {
-    managed_config_service().statuses()
+    let service = managed_config_service();
+    let mut statuses = service.statuses()?;
+    let wsl_discovery = WindowsWslDistributionDiscovery;
+    if let Ok(distributions) = wsl_discovery.distributions() {
+        for distribution in distributions {
+            let Some(home_path) = distribution.home_path else {
+                continue;
+            };
+            statuses.extend(service.wsl_statuses(&distribution.name, &home_path)?);
+        }
+    }
+    Ok(statuses)
 }
 
 pub fn activate_claude_config(
@@ -551,7 +562,7 @@ mod tests {
     #[test]
     fn managed_config_statuses_resolve_windows_paths() {
         let statuses = managed_config_statuses().expect("status resolution should succeed");
-        assert_eq!(statuses.len(), 3);
+        assert!(statuses.len() >= 3);
         assert!(statuses
             .iter()
             .any(|status| status.config_path.contains(".claude")));

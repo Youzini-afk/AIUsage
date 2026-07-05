@@ -139,8 +139,10 @@ Check:
 
 - The UI shows the target config path before activation/restore.
 - The Config takeover panel shows `Managed`, `Detected`, `Missing`, or `Warning` for each native target.
+- WSL rows appear as `WSL` targets when AIUsage can resolve a distro home path.
 - The backup path exists after activation when the original file existed.
 - Restore is enabled only when AIUsage detects managed content or a sidecar backup.
+- WSL restore remains disabled until explicit WSL activation support is enabled.
 - Restore writes the original file bytes back or removes a managed-only file.
 - Native Windows and WSL targets are treated as separate choices.
 
