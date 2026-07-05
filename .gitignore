@@ -55,6 +55,13 @@ dist/
 # === Dependency managers ===
 Pods/
 Carthage/
+node_modules/
+
+# === Windows/Tauri workspace ===
+Windows/dist/
+Windows/target/
+Windows/src-tauri/gen/
+Windows/src-tauri/target/
 
 # === Internal planning docs ===
 docs/NEXT_VERSION_TODO.md

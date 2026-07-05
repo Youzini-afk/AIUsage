@@ -1,0 +1,59 @@
+name: Windows Foundation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "Windows/**"
+      - "docs/WINDOWS_*.md"
+      - ".github/workflows/windows-foundation.yml"
+  pull_request:
+    paths:
+      - "Windows/**"
+      - "docs/WINDOWS_*.md"
+      - ".github/workflows/windows-foundation.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-foundation:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        shell: pwsh
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.7.0 --activate
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install frontend dependencies
+        working-directory: Windows
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend shell
+        working-directory: Windows
+        run: pnpm build
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path Windows/Cargo.toml --all -- --check
+
+      - name: Lint Rust workspace
+        run: cargo clippy --manifest-path Windows/Cargo.toml --workspace --all-targets -- -D warnings
+
+      - name: Test Rust workspace
+        run: cargo test --manifest-path Windows/Cargo.toml --workspace

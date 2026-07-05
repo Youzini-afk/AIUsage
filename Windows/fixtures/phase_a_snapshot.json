@@ -1,0 +1,24 @@
+{
+  "appName": "AIUsage",
+  "phase": "Windows Phase A",
+  "surfaces": [
+    { "id": "dashboard", "label": "Dashboard", "status": "foundationReady" },
+    { "id": "subscriptions", "label": "Subscriptions", "status": "foundationReady" },
+    { "id": "apiProviders", "label": "API Providers", "status": "foundationReady" },
+    { "id": "codexProxy", "label": "Codex Proxy", "status": "foundationReady" },
+    { "id": "opencodeProxy", "label": "OpenCode Proxy", "status": "foundationReady" },
+    { "id": "claudeProxy", "label": "Claude Code Proxy", "status": "foundationReady" },
+    { "id": "usageStats", "label": "Usage Stats", "status": "foundationReady" },
+    { "id": "callAnalytics", "label": "Call Analytics", "status": "foundationReady" },
+    { "id": "inbox", "label": "Inbox", "status": "foundationReady" },
+    { "id": "settings", "label": "Settings", "status": "foundationReady" }
+  ],
+  "providers": [
+    { "id": "codex", "label": "Codex", "status": "foundationReady" },
+    { "id": "copilot", "label": "Copilot", "status": "foundationReady" },
+    { "id": "cursor", "label": "Cursor", "status": "foundationReady" },
+    { "id": "gemini", "label": "Gemini CLI", "status": "foundationReady" },
+    { "id": "opencode", "label": "OpenCode", "status": "foundationReady" }
+  ],
+  "releaseTargets": ["NSIS setup.exe", "MSI", "Tauri updater"]
+}
