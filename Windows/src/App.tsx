@@ -371,6 +371,30 @@ const sections = [
 ];
 
 const sectionIds = new Set(sections.map((section) => section.id));
+const sectionEyebrows: Record<string, string> = {
+  dashboard: "Windows product line",
+  subscriptions: "Credential vault",
+  apiProviders: "Provider contracts",
+  codexProxy: "Proxy and config takeover",
+  opencodeProxy: "Proxy and config takeover",
+  claudeProxy: "Proxy and config takeover",
+  usageStats: "Usage archive",
+  callAnalytics: "Local call inventory",
+  inbox: "Action inbox",
+  settings: "Windows platform"
+};
+
+const proxySectionTracks: Record<string, ProxyTrack> = {
+  codexProxy: "codex",
+  opencodeProxy: "openCode",
+  claudeProxy: "claudeCode"
+};
+
+const proxySectionConfigKinds: Record<string, ManagedConfigKind> = {
+  codexProxy: "codex",
+  opencodeProxy: "openCode",
+  claudeProxy: "claude"
+};
 
 const defaultAppSettings: AppSettingsDocument = {
   version: 1,
@@ -444,6 +468,42 @@ const defaultProxyDrafts: Record<ProxyTrack, ProxyRuntimeDraft> = {
     defaultModel: ""
   }
 };
+
+const fallbackManagedConfigStatuses: ManagedConfigStatus[] = [
+  {
+    kind: "codex",
+    targetKind: "nativeWindows",
+    configPath: "%USERPROFILE%\\.codex\\config.toml",
+    backupPath: "%USERPROFILE%\\.codex\\config.toml.aiusage.bak",
+    configExists: false,
+    backupExists: false,
+    managed: false,
+    usesJsonc: false,
+    parseError: null
+  },
+  {
+    kind: "claude",
+    targetKind: "nativeWindows",
+    configPath: "%USERPROFILE%\\.claude\\settings.json",
+    backupPath: "%USERPROFILE%\\.claude\\settings.json.aiusage.bak",
+    configExists: false,
+    backupExists: false,
+    managed: false,
+    usesJsonc: false,
+    parseError: null
+  },
+  {
+    kind: "openCode",
+    targetKind: "nativeWindows",
+    configPath: "%USERPROFILE%\\.config\\opencode\\opencode.json",
+    backupPath: "%USERPROFILE%\\.config\\opencode\\opencode.json.aiusage.bak",
+    configExists: false,
+    backupExists: false,
+    managed: false,
+    usesJsonc: false,
+    parseError: null
+  }
+];
 
 function statusLabel(status: FeatureStatus): string {
   switch (status) {
@@ -785,15 +845,17 @@ export function App() {
 
     listen<string>("aiusage-open-section", (event) => {
       if (sectionIds.has(event.payload)) {
-        setActiveSection(event.payload);
+        activateSection(event.payload);
       }
-    }).then((listener) => {
-      if (mounted) {
-        unlisten = listener;
-      } else {
-        listener();
-      }
-    });
+    })
+      .then((listener) => {
+        if (mounted) {
+          unlisten = listener;
+        } else {
+          listener();
+        }
+      })
+      .catch(() => undefined);
 
     return () => {
       mounted = false;
@@ -811,6 +873,9 @@ export function App() {
     () => snapshot.surfaces.find((surface) => surface.id === activeSection),
     [activeSection, snapshot.surfaces]
   );
+  const activeSectionEyebrow = sectionEyebrows[activeSection] ?? "Windows product line";
+  const activeManagedConfigKind = proxySectionConfigKinds[activeSection];
+  const activeProxySection = Boolean(activeManagedConfigKind);
 
   const readyCount = snapshot.surfaces.filter((surface) => surface.status !== "planned").length;
   const runningProxyCount = proxyHealth.filter((health) => health.state === "running").length;
@@ -917,9 +982,15 @@ export function App() {
   const localCaTrusted = Boolean(localCertificateAuthority?.trustedCurrentUserRoot);
   const localCaStateLabel = localCaTrusted ? "Trusted" : localCaPrepared ? "Prepared" : "Not ready";
   const localCaStatusClass = localCaTrusted ? "complete" : localCaPrepared ? "inProgress" : "planned";
-  const managedConfigManagedCount = managedConfigStatuses.filter((status) => status.managed).length;
-  const managedConfigBackupCount = managedConfigStatuses.filter((status) => status.backupExists).length;
-  const managedConfigWarningCount = managedConfigStatuses.filter((status) => status.parseError).length;
+  const visibleManagedConfigStatuses = activeManagedConfigKind
+    ? managedConfigStatuses.filter((status) => status.kind === activeManagedConfigKind)
+    : managedConfigStatuses;
+  const renderedManagedConfigStatuses = (
+    visibleManagedConfigStatuses.length ? visibleManagedConfigStatuses : fallbackManagedConfigStatuses
+  ).filter((status) => !activeManagedConfigKind || status.kind === activeManagedConfigKind);
+  const renderedManagedConfigManagedCount = renderedManagedConfigStatuses.filter((status) => status.managed).length;
+  const renderedManagedConfigBackupCount = renderedManagedConfigStatuses.filter((status) => status.backupExists).length;
+  const renderedManagedConfigWarningCount = renderedManagedConfigStatuses.filter((status) => status.parseError).length;
   const selectedCredentialProvider =
     credentialProviderOptions.find((provider) => provider.id === credentialForm.providerId) ??
     credentialProviderOptions[0];
@@ -934,6 +1005,64 @@ export function App() {
     : updaterState === "current"
       ? "Current installed build"
       : "Signed Windows updater endpoint";
+  const inboxItems = [
+    systemProxy?.errorMessage
+      ? { title: "System proxy", detail: systemProxy.errorMessage, status: "blocked" as FeatureStatus }
+      : null,
+    platformEnvironment?.browserProfileError
+      ? { title: "Browser profiles", detail: platformEnvironment.browserProfileError, status: "blocked" as FeatureStatus }
+      : null,
+    platformEnvironment?.wslError
+      ? { title: "WSL", detail: platformEnvironment.wslError, status: "blocked" as FeatureStatus }
+      : null,
+    localCertificateAuthorityError
+      ? { title: "Local HTTPS CA", detail: localCertificateAuthorityError, status: "blocked" as FeatureStatus }
+      : null,
+    managedConfigError
+      ? { title: "Config takeover", detail: managedConfigError, status: "blocked" as FeatureStatus }
+      : null,
+    proxyActionError ? { title: "Proxy runtime", detail: proxyActionError, status: "blocked" as FeatureStatus } : null,
+    credentialError ? { title: "Credential vault", detail: credentialError, status: "blocked" as FeatureStatus } : null,
+    diagnosticsError ? { title: "Diagnostics", detail: diagnosticsError, status: "blocked" as FeatureStatus } : null,
+    updaterError ? { title: "Updater", detail: updaterError, status: "blocked" as FeatureStatus } : null,
+    ...(localCertificateAuthority?.warningMessages ?? []).map((detail) => ({
+      title: "Local HTTPS CA",
+      detail,
+      status: "inProgress" as FeatureStatus
+    })),
+    ...managedConfigStatuses
+      .filter((status) => status.parseError)
+      .map((status) => ({
+        title: `${managedConfigKindLabel(status.kind)} config`,
+        detail: status.parseError ?? "",
+        status: "blocked" as FeatureStatus
+      })),
+    ...inventoryRows.flatMap((row) =>
+      row.warnings.map((detail) => ({
+        title: `${callSourceLabel(row.source)} inventory`,
+        detail,
+        status: "inProgress" as FeatureStatus
+      }))
+    )
+  ].filter((item): item is { title: string; detail: string; status: FeatureStatus } => Boolean(item));
+
+  function activateSection(sectionId: string) {
+    setActiveSection(sectionId);
+    const proxyTrack = proxySectionTracks[sectionId];
+    if (proxyTrack) {
+      setActiveProxyTrack(proxyTrack);
+      setProxyPreflightResult(null);
+    }
+  }
+
+  function activateProxyTrack(track: ProxyTrack) {
+    setActiveProxyTrack(track);
+    setProxyPreflightResult(null);
+    const matchingSection = Object.entries(proxySectionTracks).find(([, mappedTrack]) => mappedTrack === track)?.[0];
+    if (matchingSection) {
+      setActiveSection(matchingSection);
+    }
+  }
 
   function saveSettingsPatch(patch: Partial<AppSettingsDocument>) {
     const previous = appSettings;
@@ -1252,7 +1381,7 @@ export function App() {
                 key={section.id}
                 className={isActive ? "nav-item active" : "nav-item"}
                 type="button"
-                onClick={() => setActiveSection(section.id)}
+                onClick={() => activateSection(section.id)}
               >
                 <Icon size={17} />
                 <span>{section.label}</span>
@@ -1265,7 +1394,7 @@ export function App() {
       <section className="workspace">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Windows product line</p>
+            <p className="eyebrow">{activeSectionEyebrow}</p>
             <h2>{activeSurface?.label ?? "Dashboard"}</h2>
           </div>
           <div className="topbar-actions">
@@ -1276,14 +1405,14 @@ export function App() {
               type="button"
               title="Platform settings"
               aria-label="Platform settings"
-              onClick={() => setActiveSection("settings")}
+              onClick={() => activateSection("settings")}
             >
               <MonitorCog size={18} />
             </button>
           </div>
         </header>
 
-        <div className="summary-grid">
+        <div className="summary-grid" hidden={activeSection !== "dashboard"}>
           <section className="stat-tile">
             <span>Product surfaces</span>
             <strong>
@@ -1336,7 +1465,7 @@ export function App() {
           </section>
         </div>
 
-        <section className="panel">
+        <section className="panel" hidden={activeSection !== "dashboard"}>
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Surface readiness</p>
@@ -1357,7 +1486,75 @@ export function App() {
           </div>
         </section>
 
-        <section className="panel compact-panel">
+        <section className="panel" hidden={activeSection !== "apiProviders"}>
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Provider contracts</p>
+              <h3>Supported providers</h3>
+            </div>
+            <Layers3 size={18} />
+          </div>
+          <div className="summary-grid compact-summary">
+            <section className="stat-tile">
+              <span>Ready</span>
+              <strong>{snapshot.providers.filter((provider) => provider.status !== "planned").length}</strong>
+            </section>
+            <section className="stat-tile">
+              <span>Planned</span>
+              <strong>{snapshot.providers.filter((provider) => provider.status === "planned").length}</strong>
+            </section>
+            <section className="stat-tile">
+              <span>Blocked</span>
+              <strong>{snapshot.providers.filter((provider) => provider.status === "blocked").length}</strong>
+            </section>
+          </div>
+          <div className="surface-list">
+            {snapshot.providers.map((provider) => (
+              <article key={provider.id} className="surface-row">
+                <div>
+                  <strong>{provider.label}</strong>
+                  <span>{provider.id}</span>
+                </div>
+                <span className={`status ${provider.status}`}>{statusLabel(provider.status)}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel" hidden={activeSection !== "inbox"}>
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Action inbox</p>
+              <h3>Items needing attention</h3>
+            </div>
+            <MessageSquareText size={18} />
+          </div>
+          <div className="surface-list single-column">
+            {inboxItems.length ? (
+              inboxItems.map((item, index) => (
+                <article key={`${item.title}-${index}`} className="surface-row">
+                  <div>
+                    <strong>{item.title}</strong>
+                    <span>{item.detail}</span>
+                  </div>
+                  <span className={`status ${item.status}`}>
+                    {item.status === "blocked" ? "Action" : "Review"}
+                  </span>
+                </article>
+              ))
+            ) : (
+              <article className="surface-row">
+                <div>
+                  <strong>No action items</strong>
+                  <span>Runtime warnings and scan errors will appear here.</span>
+                </div>
+                <span className="status complete">Clear</span>
+              </article>
+            )}
+          </div>
+        </section>
+
+        <section className="panel compact-panel" hidden={activeSection !== "settings"}>
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Platform status</p>
@@ -1529,7 +1726,7 @@ export function App() {
           {platformEnvironment?.wslError ? <div className="settings-error">{platformEnvironment.wslError}</div> : null}
         </section>
 
-        <section className="panel compact-panel">
+        <section className="panel compact-panel" hidden={!activeProxySection}>
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Target safety</p>
@@ -1541,57 +1738,20 @@ export function App() {
             <section className="usage-meter">
               <span>Managed</span>
               <strong>
-                {managedConfigManagedCount}/{managedConfigStatuses.length || 3}
+                {renderedManagedConfigManagedCount}/{renderedManagedConfigStatuses.length}
               </strong>
             </section>
             <section className="usage-meter">
               <span>Backups</span>
-              <strong>{managedConfigBackupCount}</strong>
+              <strong>{renderedManagedConfigBackupCount}</strong>
             </section>
             <section className="usage-meter">
               <span>Warnings</span>
-              <strong>{managedConfigWarningCount}</strong>
+              <strong>{renderedManagedConfigWarningCount}</strong>
             </section>
           </div>
           <div className="surface-list single-column">
-            {(managedConfigStatuses.length
-              ? managedConfigStatuses
-              : [
-                  {
-                    kind: "codex",
-                    targetKind: "nativeWindows",
-                    configPath: "%USERPROFILE%\\.codex\\config.toml",
-                    backupPath: "%USERPROFILE%\\.codex\\config.toml.aiusage.bak",
-                    configExists: false,
-                    backupExists: false,
-                    managed: false,
-                    usesJsonc: false,
-                    parseError: null
-                  },
-                  {
-                    kind: "claude",
-                    targetKind: "nativeWindows",
-                    configPath: "%USERPROFILE%\\.claude\\settings.json",
-                    backupPath: "%USERPROFILE%\\.claude\\settings.json.aiusage.bak",
-                    configExists: false,
-                    backupExists: false,
-                    managed: false,
-                    usesJsonc: false,
-                    parseError: null
-                  },
-                  {
-                    kind: "openCode",
-                    targetKind: "nativeWindows",
-                    configPath: "%USERPROFILE%\\.config\\opencode\\opencode.json",
-                    backupPath: "%USERPROFILE%\\.config\\opencode\\opencode.json.aiusage.bak",
-                    configExists: false,
-                    backupExists: false,
-                    managed: false,
-                    usesJsonc: false,
-                    parseError: null
-                  }
-                ] satisfies ManagedConfigStatus[]
-            ).map((status) => (
+            {renderedManagedConfigStatuses.map((status) => (
               <article key={`${status.kind}-${status.targetKind}-${status.configPath}`} className="surface-row config-row">
                 <div>
                   <strong>
@@ -1633,7 +1793,7 @@ export function App() {
           {managedConfigError ? <div className="settings-error">{managedConfigError}</div> : null}
         </section>
 
-        <section className="panel compact-panel">
+        <section className="panel compact-panel" hidden={activeSection !== "subscriptions"}>
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Credential vault</p>
@@ -1750,7 +1910,7 @@ export function App() {
           {credentialError ? <div className="settings-error">{credentialError}</div> : null}
         </section>
 
-        <section className="panel">
+        <section className="panel" hidden={activeSection !== "callAnalytics"}>
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Local inventory</p>
@@ -1782,7 +1942,7 @@ export function App() {
           </div>
         </section>
 
-        <section className="panel">
+        <section className="panel" hidden={activeSection !== "callAnalytics"}>
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Event aggregation</p>
@@ -1841,7 +2001,7 @@ export function App() {
           </div>
         </section>
 
-        <section className="panel compact-panel">
+        <section className="panel compact-panel" hidden={activeSection !== "settings"}>
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Preferences</p>
@@ -1940,7 +2100,7 @@ export function App() {
           </div>
         </section>
 
-        <section className="panel compact-panel">
+        <section className="panel compact-panel" hidden={activeSection !== "settings"}>
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Release foundation</p>
@@ -1988,7 +2148,7 @@ export function App() {
           {updaterError ? <div className="settings-error">{updaterError}</div> : null}
         </section>
 
-        <section className="panel">
+        <section className="panel" hidden={activeSection !== "usageStats"}>
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Usage archive</p>
@@ -2041,7 +2201,7 @@ export function App() {
           </div>
         </section>
 
-        <section className="panel compact-panel">
+        <section className="panel compact-panel" hidden={!activeProxySection}>
           <div className="panel-heading">
             <div>
               <p className="eyebrow">Runtime health</p>
@@ -2055,11 +2215,10 @@ export function App() {
               <select
                 value={activeProxyTrack}
                 onChange={(event) => {
-                  setActiveProxyTrack(event.target.value as ProxyTrack);
-                  setProxyPreflightResult(null);
+                  activateProxyTrack(event.target.value as ProxyTrack);
                 }}
               >
-                {(["codex", "claudeCode", "openCode", "global"] satisfies ProxyTrack[]).map((track) => (
+                {(["codex", "claudeCode", "openCode"] satisfies ProxyTrack[]).map((track) => (
                   <option key={track} value={track}>
                     {proxyTrackLabel(track)}
                   </option>

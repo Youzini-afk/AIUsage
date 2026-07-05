@@ -12,6 +12,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   min-width: 320px;
@@ -25,14 +29,14 @@ button {
 .app-shell {
   display: grid;
   min-height: 100vh;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: 236px minmax(0, 1fr);
 }
 
 .sidebar {
   display: flex;
   flex-direction: column;
-  gap: 22px;
-  padding: 22px 14px;
+  gap: 18px;
+  padding: 20px 12px;
   border-right: 1px solid #dbe2e6;
   background: #ffffff;
 }
@@ -46,8 +50,8 @@ button {
 
 .brand-mark {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 36px;
+  height: 36px;
   place-items: center;
   border-radius: 8px;
   background: #17202a;
@@ -86,7 +90,7 @@ nav {
   width: 100%;
   align-items: center;
   gap: 10px;
-  min-height: 38px;
+  min-height: 36px;
   padding: 0 10px;
   border: 0;
   border-radius: 7px;
@@ -109,8 +113,8 @@ nav {
 .workspace {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 24px;
+  gap: 16px;
+  padding: 24px 30px 36px;
   overflow: auto;
 }
 
@@ -123,7 +127,7 @@ nav {
 
 .topbar h2 {
   margin-top: 3px;
-  font-size: 1.55rem;
+  font-size: 1.42rem;
 }
 
 .topbar-actions {
@@ -145,8 +149,13 @@ nav {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
   gap: 12px;
+}
+
+.compact-summary {
+  margin-bottom: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 190px));
 }
 
 .stat-tile,
@@ -154,14 +163,15 @@ nav {
   border: 1px solid #dbe2e6;
   border-radius: 8px;
   background: #ffffff;
+  box-shadow: 0 1px 2px rgba(23, 32, 42, 0.04);
 }
 
 .stat-tile {
   display: flex;
-  min-height: 92px;
+  min-height: 78px;
   flex-direction: column;
   justify-content: space-between;
-  padding: 15px;
+  padding: 13px 14px;
 }
 
 .stat-tile span {
@@ -171,7 +181,7 @@ nav {
 
 .stat-tile strong {
   color: #17202a;
-  font-size: 1.8rem;
+  font-size: 1.55rem;
 }
 
 .panel {
@@ -179,7 +189,7 @@ nav {
 }
 
 .compact-panel {
-  max-width: 760px;
+  max-width: 900px;
 }
 
 .panel-heading {
@@ -197,7 +207,7 @@ nav {
 
 .surface-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 8px;
 }
 
@@ -205,7 +215,7 @@ nav {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 58px;
+  min-height: 56px;
   gap: 12px;
   padding: 10px 12px;
   border: 1px solid #e3e9ec;
