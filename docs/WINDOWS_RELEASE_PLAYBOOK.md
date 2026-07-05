@@ -60,6 +60,7 @@ Before a public release:
 - install the NSIS setup on a clean Windows 11 VM;
 - install the MSI on a clean Windows 11 VM;
 - launch AIUsage after install;
+- confirm the Windows environment panel shows app paths, system proxy state, and browser profile status;
 - verify tray menu Show AIUsage, Open Settings, Quit AIUsage, close-to-tray, and restore behavior;
 - export diagnostics from Settings and confirm the report is metadata-only;
 - confirm Credential Manager entries can be created and deleted;

@@ -47,6 +47,7 @@ Deliverables:
 - System proxy reader.
 - Certificate generation/trust installer.
 - Autostart, shell open, notifications, and log export adapters. Launch-at-login now has a Windows HKCU Run adapter wired through Tauri settings commands, the desktop shell consumes persisted tray/background lifecycle settings, and Settings can export a secret-free diagnostics metadata report.
+- Platform environment snapshot exposed through Tauri/UI for app paths, CLI paths, system proxy state, and browser profile metadata.
 
 Completion criteria:
 
@@ -109,6 +110,7 @@ Completion criteria:
 - UI routes map to all macOS product surfaces.
 - Major workflows are covered by automated E2E tests and manual QA checklist.
 - Long-running refresh/proxy operations stream progress and errors to the UI.
+- Platform environment status is visible for Windows path/proxy/browser-profile troubleshooting.
 
 ### Track F: Packaging, Signing, Updates, CI
 

@@ -118,13 +118,15 @@ Windows implementations:
 - Certificates: user or local-machine certificate store installation flow with clear elevation behavior.
 - Autostart: current-user HKCU Run registry adapter is implemented; tray lifecycle remains in the Tauri desktop shell and consumes persisted app settings.
 
+The Tauri command layer exposes a non-secret platform environment snapshot built from these adapters: app/CLI paths, system proxy endpoints, and browser profile metadata. Browser rows identify candidate cookie databases for future provider login flows but do not decrypt or read cookie values.
+
 ## Desktop Shell
 
 ### Tauri App Responsibilities
 
 - Main window and route shell.
 - Tray icon, tray status labels, context menu, and background behavior. The current shell uses Tauri tray-icon support for Show AIUsage, Open Settings, Quit AIUsage, click-to-restore, settings-driven close-to-tray, and explicit quit bypass.
-- Tauri commands/events for provider refresh, proxy activation, config editing, and update checks.
+- Tauri commands/events for provider refresh, proxy activation, config editing, platform environment status, diagnostics export, and update checks.
 - WebView2-based UI rendering.
 - Installer/updater integration.
 

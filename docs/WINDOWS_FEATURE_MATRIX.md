@@ -28,6 +28,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | Desktop shell | Tauri 2 + React + Rust workspace builds on Windows |
 | Contract schema | Core product surfaces, provider identities, proxy tracks, and release targets are covered by fixture tests |
 | Platform adapters | Windows app paths, Credential Manager + DPAPI vault, browser profile discovery, system proxy snapshot, TCP port owner lookup, and sensitive-file permission tightening are implemented behind traits |
+| Platform environment UI | Tauri exposes Windows app/CLI paths, current-user WinHTTP/WinINET proxy snapshot, and Chromium/Cursor browser profile discovery; the Windows UI summarizes proxy state, known paths, endpoint count, and detected profiles without reading cookies |
 | Config transforms | Codex `config.toml` managed blocks and OpenCode provider/model injection are implemented in `aiusage-core` |
 | Config takeover service | Claude/Codex/OpenCode native Windows paths, custom paths, sidecar `.aiusage.bak` backups, idempotent activation, restore, OpenCode JSONC parsing, and Tauri commands are implemented |
 | Proxy runtime | Async Rust passthrough supervisor starts/stops local listeners, exposes health through Tauri, validates client keys, normalizes `/v1` upstream paths, injects upstream auth, streams upstream responses, emits request/usage events, parses OpenAI/Anthropic usage shapes, and surfaces four-track health in the Windows UI |

@@ -35,6 +35,36 @@ type DesktopSnapshot = {
   releaseTargets: string[];
 };
 
+type DesktopPathSnapshot = {
+  appConfigDir: string | null;
+  appDataDir: string | null;
+  codexHome: string | null;
+  claudeHome: string | null;
+  opencodeConfigDir: string | null;
+};
+
+type SystemProxySummary = {
+  http: string | null;
+  https: string | null;
+  socks: string | null;
+  anyEnabled: boolean;
+  errorMessage: string | null;
+};
+
+type BrowserProfileSummary = {
+  browserName: string;
+  profileName: string;
+  cookiesDbPath: string;
+};
+
+type PlatformEnvironmentSnapshot = {
+  generatedAtEpochMs: number;
+  paths: DesktopPathSnapshot;
+  systemProxy: SystemProxySummary;
+  browserProfiles: BrowserProfileSummary[];
+  browserProfileError: string | null;
+};
+
 type ProxyRuntimeState = "stopped" | "starting" | "running" | "stopping" | "failed";
 
 type ProxyHealth = {
@@ -304,6 +334,7 @@ function callKindLabel(kind: CallAnalyticsKind): string {
 
 export function App() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>(fallbackSnapshot);
+  const [platformEnvironment, setPlatformEnvironment] = useState<PlatformEnvironmentSnapshot | null>(null);
   const [proxyHealth, setProxyHealth] = useState<ProxyHealth[]>([]);
   const [proxyArchives, setProxyArchives] = useState<ProxyUsageArchiveSummary[]>([]);
   const [proxyUsageStats, setProxyUsageStats] = useState<ProxyUsageStats | null>(null);
@@ -320,6 +351,9 @@ export function App() {
     invoke<DesktopSnapshot>("app_snapshot")
       .then(setSnapshot)
       .catch(() => setSnapshot(fallbackSnapshot));
+    invoke<PlatformEnvironmentSnapshot>("platform_environment")
+      .then(setPlatformEnvironment)
+      .catch(() => setPlatformEnvironment(null));
     invoke<ProxyHealth[]>("proxy_statuses")
       .then(setProxyHealth)
       .catch(() => setProxyHealth([]));
@@ -443,6 +477,19 @@ export function App() {
     .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
     .slice(0, 6);
   const settingsDocument = appSettings?.settings ?? defaultAppSettings;
+  const platformPathRows = [
+    { label: "App config", path: platformEnvironment?.paths.appConfigDir ?? "%APPDATA%\\AIUsage" },
+    { label: "App data", path: platformEnvironment?.paths.appDataDir ?? "%LOCALAPPDATA%\\AIUsage" },
+    { label: "Claude", path: platformEnvironment?.paths.claudeHome ?? "%USERPROFILE%\\.claude" },
+    { label: "Codex", path: platformEnvironment?.paths.codexHome ?? "%USERPROFILE%\\.codex" },
+    {
+      label: "OpenCode",
+      path: platformEnvironment?.paths.opencodeConfigDir ?? "%USERPROFILE%\\.config\\opencode"
+    }
+  ];
+  const systemProxy = platformEnvironment?.systemProxy;
+  const browserProfiles = platformEnvironment?.browserProfiles ?? [];
+  const availablePlatformPaths = platformPathRows.filter((row) => !row.path.includes("%")).length;
 
   function saveSettingsPatch(patch: Partial<AppSettingsDocument>) {
     const previous = appSettings;
@@ -589,6 +636,72 @@ export function App() {
               </article>
             ))}
           </div>
+        </section>
+
+        <section className="panel compact-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Platform status</p>
+              <h3>Windows environment</h3>
+            </div>
+            <MonitorCog size={18} />
+          </div>
+          <div className="usage-grid">
+            <section className="usage-meter">
+              <span>System proxy</span>
+              <strong>{systemProxy?.anyEnabled ? "On" : "Off"}</strong>
+            </section>
+            <section className="usage-meter">
+              <span>Browser profiles</span>
+              <strong>{browserProfiles.length}</strong>
+            </section>
+            <section className="usage-meter">
+              <span>Known paths</span>
+              <strong>
+                {availablePlatformPaths}/{platformPathRows.length}
+              </strong>
+            </section>
+            <section className="usage-meter">
+              <span>Proxy endpoints</span>
+              <strong>{[systemProxy?.http, systemProxy?.https, systemProxy?.socks].filter(Boolean).length}</strong>
+            </section>
+          </div>
+          <div className="surface-list single-column">
+            {platformPathRows.map((row) => (
+              <article key={row.label} className="surface-row">
+                <div>
+                  <strong>{row.label}</strong>
+                  <span>{row.path}</span>
+                </div>
+              </article>
+            ))}
+            <article className="surface-row">
+              <div>
+                <strong>System proxy</strong>
+                <span>{systemProxy?.http ?? systemProxy?.https ?? systemProxy?.socks ?? "Not configured"}</span>
+              </div>
+              <span className={`status ${systemProxy?.anyEnabled ? "runtime-running" : "runtime-stopped"}`}>
+                {systemProxy?.anyEnabled ? "Enabled" : "Disabled"}
+              </span>
+            </article>
+            {(browserProfiles.length
+              ? browserProfiles.slice(0, 4)
+              : [{ browserName: "Browser profile", profileName: "Not detected", cookiesDbPath: "" }]
+            ).map((profile) => (
+              <article key={`${profile.browserName}-${profile.profileName}`} className="surface-row">
+                <div>
+                  <strong>
+                    {profile.browserName} · {profile.profileName}
+                  </strong>
+                  <span>{profile.cookiesDbPath || "No cookie database found"}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+          {systemProxy?.errorMessage ? <div className="settings-error">{systemProxy.errorMessage}</div> : null}
+          {platformEnvironment?.browserProfileError ? (
+            <div className="settings-error">{platformEnvironment.browserProfileError}</div>
+          ) : null}
         </section>
 
         <section className="panel">

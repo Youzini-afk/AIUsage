@@ -1,12 +1,13 @@
 use aiusage_core::phase_a_snapshot;
-use aiusage_platform::AppPaths;
+use aiusage_platform::{AppPaths, BrowserSessionDiscovery, SystemProxyReader};
 use aiusage_proxy::{ProxyError, ProxyRuntimeEvent, ProxySupervisor};
 use aiusage_services::{
     AppSettingsService, CallAnalyticsInventoryService, CallAnalyticsService, CredentialRegistry,
     DiagnosticsExportService, ManagedConfigService, ServiceError,
 };
 use aiusage_windows::{
-    WindowsAppPaths, WindowsAutostartManager, WindowsCredentialVault, WindowsFilePermissionGuard,
+    WindowsAppPaths, WindowsAutostartManager, WindowsBrowserDiscovery, WindowsCredentialVault,
+    WindowsFilePermissionGuard, WindowsSystemProxyReader,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -39,6 +40,34 @@ pub struct TauriDesktopSnapshot {
     pub paths: DesktopPathSnapshot,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemProxySummary {
+    pub http: Option<String>,
+    pub https: Option<String>,
+    pub socks: Option<String>,
+    pub any_enabled: bool,
+    pub error_message: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserProfileSummary {
+    pub browser_name: String,
+    pub profile_name: String,
+    pub cookies_db_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformEnvironmentSnapshot {
+    pub generated_at_epoch_ms: u128,
+    pub paths: DesktopPathSnapshot,
+    pub system_proxy: SystemProxySummary,
+    pub browser_profiles: Vec<BrowserProfileSummary>,
+    pub browser_profile_error: Option<String>,
+}
+
 pub fn build_phase_a_snapshot() -> DesktopSnapshot {
     phase_a_snapshot()
 }
@@ -47,13 +76,52 @@ pub fn build_phase_a_desktop_snapshot() -> TauriDesktopSnapshot {
     let paths = WindowsAppPaths::new();
     TauriDesktopSnapshot {
         desktop: build_phase_a_snapshot(),
-        paths: DesktopPathSnapshot {
-            app_config_dir: paths.app_config_dir().ok().map(display_path),
-            app_data_dir: paths.app_data_dir().ok().map(display_path),
-            codex_home: paths.codex_home().ok().map(display_path),
-            claude_home: paths.claude_home().ok().map(display_path),
-            opencode_config_dir: paths.opencode_config_dir().ok().map(display_path),
+        paths: desktop_path_snapshot(&paths),
+    }
+}
+
+pub fn platform_environment() -> PlatformEnvironmentSnapshot {
+    let paths = WindowsAppPaths::new();
+    let proxy_reader = WindowsSystemProxyReader;
+    let system_proxy = match proxy_reader.current_proxy() {
+        Ok(snapshot) => SystemProxySummary {
+            any_enabled: snapshot.is_any_enabled(),
+            http: snapshot.http,
+            https: snapshot.https,
+            socks: snapshot.socks,
+            error_message: None,
         },
+        Err(error) => SystemProxySummary {
+            http: None,
+            https: None,
+            socks: None,
+            any_enabled: false,
+            error_message: Some(error.to_string()),
+        },
+    };
+
+    let browser_discovery = WindowsBrowserDiscovery::new();
+    let (browser_profiles, browser_profile_error) = match browser_discovery.available_profiles() {
+        Ok(profiles) => (
+            profiles
+                .into_iter()
+                .map(|profile| BrowserProfileSummary {
+                    browser_name: profile.browser_name,
+                    profile_name: profile.profile_name,
+                    cookies_db_path: profile.cookies_db_path.display().to_string(),
+                })
+                .collect(),
+            None,
+        ),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+
+    PlatformEnvironmentSnapshot {
+        generated_at_epoch_ms: epoch_ms(),
+        paths: desktop_path_snapshot(&paths),
+        system_proxy,
+        browser_profiles,
+        browser_profile_error,
     }
 }
 
@@ -204,8 +272,25 @@ fn app_settings_service() -> AppSettingsService<WindowsAppPaths, WindowsAutostar
     AppSettingsService::with_autostart(WindowsAppPaths::new(), WindowsAutostartManager::default())
 }
 
+fn desktop_path_snapshot(paths: &WindowsAppPaths) -> DesktopPathSnapshot {
+    DesktopPathSnapshot {
+        app_config_dir: paths.app_config_dir().ok().map(display_path),
+        app_data_dir: paths.app_data_dir().ok().map(display_path),
+        codex_home: paths.codex_home().ok().map(display_path),
+        claude_home: paths.claude_home().ok().map(display_path),
+        opencode_config_dir: paths.opencode_config_dir().ok().map(display_path),
+    }
+}
+
 fn display_path(path: std::path::PathBuf) -> String {
     path.display().to_string()
+}
+
+fn epoch_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -220,6 +305,13 @@ mod tests {
             .release_targets
             .iter()
             .any(|target| target.contains("MSI")));
+    }
+
+    #[test]
+    fn platform_environment_snapshot_is_non_fatal() {
+        let snapshot = platform_environment();
+        assert!(snapshot.paths.app_config_dir.is_some());
+        let _ = snapshot.system_proxy.any_enabled;
     }
 
     #[test]
