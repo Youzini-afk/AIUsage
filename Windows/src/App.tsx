@@ -346,7 +346,13 @@ const fallbackSnapshot: DesktopSnapshot = {
     { id: "copilot", label: "Copilot", status: "foundationReady" },
     { id: "cursor", label: "Cursor", status: "foundationReady" },
     { id: "gemini", label: "Gemini CLI", status: "foundationReady" },
-    { id: "opencode", label: "OpenCode", status: "foundationReady" }
+    { id: "opencode", label: "OpenCode", status: "foundationReady" },
+    { id: "antigravity", label: "Antigravity", status: "planned" },
+    { id: "kiro", label: "Kiro", status: "planned" },
+    { id: "warp", label: "Warp", status: "blocked" },
+    { id: "droid", label: "Droid", status: "planned" },
+    { id: "kimi", label: "Kimi", status: "planned" },
+    { id: "minimax", label: "MiniMax", status: "planned" }
   ],
   releaseTargets: ["NSIS setup.exe", "MSI", "Tauri updater"]
 };
@@ -382,7 +388,13 @@ const credentialProviderOptions: CredentialProviderOption[] = [
   { id: "copilot", label: "Copilot", kinds: ["token", "oAuth"] },
   { id: "cursor", label: "Cursor", kinds: ["cookie", "webSession"] },
   { id: "gemini", label: "Gemini CLI", kinds: ["authFile", "oAuth"] },
-  { id: "opencode", label: "OpenCode", kinds: ["apiKey", "authFile"] }
+  { id: "opencode", label: "OpenCode", kinds: ["apiKey", "authFile"] },
+  { id: "antigravity", label: "Antigravity", kinds: ["oAuth", "webSession"] },
+  { id: "kiro", label: "Kiro", kinds: ["oAuth", "authFile"] },
+  { id: "warp", label: "Warp", kinds: ["token", "authFile"] },
+  { id: "droid", label: "Droid", kinds: ["authFile", "cookie"] },
+  { id: "kimi", label: "Kimi", kinds: ["apiKey"] },
+  { id: "minimax", label: "MiniMax", kinds: ["apiKey"] }
 ];
 
 const allCredentialKinds: CredentialKind[] = ["apiKey", "authFile", "cookie", "oAuth", "token", "webSession"];

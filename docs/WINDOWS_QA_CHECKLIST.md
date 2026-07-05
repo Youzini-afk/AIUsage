@@ -109,6 +109,7 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 
 ## Browser And Provider Inputs
 
+- Confirm the Provider contracts area shows implemented, planned, and blocked Windows providers instead of silently omitting unsupported providers.
 - Confirm Chrome, Edge, Brave, and Cursor profiles are detected when present.
 - Confirm browser profile rows do not expose cookie values.
 - Confirm missing browsers are treated as a normal empty state.

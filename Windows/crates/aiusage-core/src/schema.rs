@@ -59,6 +59,42 @@ pub fn provider_contracts() -> Vec<ProviderContract> {
             status: FeatureStatus::FoundationReady,
             credential_kinds: vec![ApiKey, AuthFile],
         },
+        ProviderContract {
+            id: "antigravity".into(),
+            label: "Antigravity".into(),
+            status: FeatureStatus::Planned,
+            credential_kinds: vec![OAuth, WebSession],
+        },
+        ProviderContract {
+            id: "kiro".into(),
+            label: "Kiro".into(),
+            status: FeatureStatus::Planned,
+            credential_kinds: vec![OAuth, AuthFile],
+        },
+        ProviderContract {
+            id: "warp".into(),
+            label: "Warp".into(),
+            status: FeatureStatus::Blocked,
+            credential_kinds: vec![Token, AuthFile],
+        },
+        ProviderContract {
+            id: "droid".into(),
+            label: "Droid".into(),
+            status: FeatureStatus::Planned,
+            credential_kinds: vec![AuthFile, Cookie],
+        },
+        ProviderContract {
+            id: "kimi".into(),
+            label: "Kimi".into(),
+            status: FeatureStatus::Planned,
+            credential_kinds: vec![ApiKey],
+        },
+        ProviderContract {
+            id: "minimax".into(),
+            label: "MiniMax".into(),
+            status: FeatureStatus::Planned,
+            credential_kinds: vec![ApiKey],
+        },
     ]
 }
 
