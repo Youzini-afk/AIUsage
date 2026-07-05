@@ -2,7 +2,8 @@ use aiusage_core::phase_a_snapshot;
 use aiusage_platform::AppPaths;
 use aiusage_proxy::{ProxyError, ProxyRuntimeEvent, ProxySupervisor};
 use aiusage_services::{
-    CallAnalyticsInventoryService, CredentialRegistry, ManagedConfigService, ServiceError,
+    CallAnalyticsInventoryService, CallAnalyticsService, CredentialRegistry, ManagedConfigService,
+    ServiceError,
 };
 use aiusage_windows::{WindowsAppPaths, WindowsCredentialVault, WindowsFilePermissionGuard};
 use serde::{Deserialize, Serialize};
@@ -11,9 +12,10 @@ use std::sync::OnceLock;
 pub use aiusage_core::{DesktopSnapshot, ProxyTrack};
 pub use aiusage_proxy::{ProxyHealth, ProxyProtocol, ProxyRuntimeConfig, ProxyRuntimeState};
 pub use aiusage_services::{
-    CallAnalyticsInventorySnapshot, ClaudeActivationRequest, CodexActivationRequest,
-    CredentialSummary, ManagedConfigKind, ManagedConfigStatus, ManagedConfigTargetKind,
-    OpenCodeActivationRequest, ProxyUsageArchiveSummary, ProxyUsageStats, UpsertCredentialRequest,
+    CallAnalyticsInventorySnapshot, CallAnalyticsSnapshot, ClaudeActivationRequest,
+    CodexActivationRequest, CredentialSummary, ManagedConfigKind, ManagedConfigStatus,
+    ManagedConfigTargetKind, OpenCodeActivationRequest, ProxyUsageArchiveSummary, ProxyUsageStats,
+    UpsertCredentialRequest,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -77,6 +79,10 @@ pub fn proxy_usage_stats() -> Result<ProxyUsageStats, ServiceError> {
 
 pub fn call_analytics_inventory() -> Result<CallAnalyticsInventorySnapshot, ServiceError> {
     CallAnalyticsInventoryService::new(WindowsAppPaths::new()).snapshot()
+}
+
+pub fn call_analytics_snapshot() -> Result<CallAnalyticsSnapshot, ServiceError> {
+    CallAnalyticsService::new(WindowsAppPaths::new()).snapshot()
 }
 
 pub fn credential_summaries() -> Result<Vec<CredentialSummary>, ServiceError> {

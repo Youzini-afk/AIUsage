@@ -62,7 +62,7 @@ Deliverables:
 - API providers and distribution model.
 - Pricing/currency conversion.
 - Usage archive readers/writers.
-- Call analytics inventory and aggregation. The Windows inventory foundation now detects native Claude/Codex/OpenCode configs, session stores, user skill roots, and configured MCP servers; event aggregation is the next parity step.
+- Call analytics inventory and aggregation. The Windows foundation now detects native Claude/Codex/OpenCode configs, session stores, user skill roots, configured MCP servers, and aggregates Claude/Codex/OpenCode call events into a Tauri snapshot.
 
 Completion criteria:
 

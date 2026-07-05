@@ -90,6 +90,41 @@ type CallAnalyticsInventorySnapshot = {
   sources: CallAnalyticsInventorySourceStatus[];
 };
 
+type CallAnalyticsKind = "mcp" | "skill" | "builtin" | "webSearch" | "other";
+
+type CallAnalyticsEntry = {
+  source: CallAnalyticsSource;
+  kind: CallAnalyticsKind;
+  name: string;
+  server: string | null;
+  agent: string | null;
+  dayKey: string;
+  count: number;
+  outcomeKnownCount: number;
+  successCount: number;
+  durationSampleCount: number;
+  durationMsTotal: number;
+};
+
+type CallAnalyticsSourceScanStatus = {
+  source: CallAnalyticsSource;
+  available: boolean;
+  eventCount: number;
+  filesScanned: number;
+  errorCode: string | null;
+  warnings: string[];
+};
+
+type CallAnalyticsSnapshot = {
+  generatedAtEpochMs: number;
+  rangeKey: string;
+  entries: CallAnalyticsEntry[];
+  installedSkills: Array<{ source: CallAnalyticsSource; name: string }>;
+  installedMcpServers: Array<{ source: CallAnalyticsSource; name: string }>;
+  agentInvocations: Array<{ source: CallAnalyticsSource; agent: string; dayKey: string; count: number }>;
+  sources: CallAnalyticsSourceScanStatus[];
+};
+
 type CredentialSummary = {
   id: string;
   providerId: string;
@@ -192,12 +227,28 @@ function callSourceLabel(source: CallAnalyticsSource): string {
   }
 }
 
+function callKindLabel(kind: CallAnalyticsKind): string {
+  switch (kind) {
+    case "mcp":
+      return "MCP";
+    case "skill":
+      return "Skill";
+    case "webSearch":
+      return "Web";
+    case "builtin":
+      return "Tool";
+    default:
+      return "Other";
+  }
+}
+
 export function App() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>(fallbackSnapshot);
   const [proxyHealth, setProxyHealth] = useState<ProxyHealth[]>([]);
   const [proxyArchives, setProxyArchives] = useState<ProxyUsageArchiveSummary[]>([]);
   const [proxyUsageStats, setProxyUsageStats] = useState<ProxyUsageStats | null>(null);
   const [callInventory, setCallInventory] = useState<CallAnalyticsInventorySnapshot | null>(null);
+  const [callSnapshot, setCallSnapshot] = useState<CallAnalyticsSnapshot | null>(null);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [activeSection, setActiveSection] = useState("dashboard");
 
@@ -217,6 +268,9 @@ export function App() {
     invoke<CallAnalyticsInventorySnapshot>("call_analytics_inventory")
       .then(setCallInventory)
       .catch(() => setCallInventory(null));
+    invoke<CallAnalyticsSnapshot>("call_analytics_snapshot")
+      .then(setCallSnapshot)
+      .catch(() => setCallSnapshot(null));
     invoke<CredentialSummary[]>("credentials")
       .then(setCredentials)
       .catch(() => setCredentials([]));
@@ -285,6 +339,20 @@ export function App() {
   const availableCallSources = inventoryRows.filter((row) => row.available).length;
   const detectedSkills = inventoryRows.reduce((total, row) => total + row.skillCount, 0);
   const detectedMcpServers = inventoryRows.reduce((total, row) => total + row.mcpServerCount, 0);
+  const callEntries = callSnapshot?.entries ?? [];
+  const totalCallEvents = callEntries.reduce((total, entry) => total + entry.count, 0);
+  const mcpCallEvents = callEntries
+    .filter((entry) => entry.kind === "mcp")
+    .reduce((total, entry) => total + entry.count, 0);
+  const skillCallEvents = callEntries
+    .filter((entry) => entry.kind === "skill")
+    .reduce((total, entry) => total + entry.count, 0);
+  const toolCallEvents = callEntries
+    .filter((entry) => entry.kind === "builtin" || entry.kind === "webSearch" || entry.kind === "other")
+    .reduce((total, entry) => total + entry.count, 0);
+  const topCallEntries = [...callEntries]
+    .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
+    .slice(0, 6);
 
   return (
     <main className="app-shell">
@@ -375,6 +443,10 @@ export function App() {
             <strong>{detectedMcpServers.toLocaleString()}</strong>
           </section>
           <section className="stat-tile">
+            <span>Call events</span>
+            <strong>{totalCallEvents.toLocaleString()}</strong>
+          </section>
+          <section className="stat-tile">
             <span>Stored credentials</span>
             <strong>{credentials.length}</strong>
           </section>
@@ -430,6 +502,65 @@ export function App() {
                 </article>
               );
             })}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Event aggregation</p>
+              <h3>Call Analytics ledger</h3>
+            </div>
+            <Activity size={18} />
+          </div>
+          <div className="usage-grid">
+            <section className="usage-meter">
+              <span>Total</span>
+              <strong>{totalCallEvents.toLocaleString()}</strong>
+            </section>
+            <section className="usage-meter">
+              <span>MCP</span>
+              <strong>{mcpCallEvents.toLocaleString()}</strong>
+            </section>
+            <section className="usage-meter">
+              <span>Skills</span>
+              <strong>{skillCallEvents.toLocaleString()}</strong>
+            </section>
+            <section className="usage-meter">
+              <span>Tools</span>
+              <strong>{toolCallEvents.toLocaleString()}</strong>
+            </section>
+          </div>
+          <div className="surface-list usage-list">
+            {(topCallEntries.length
+              ? topCallEntries
+              : [
+                  {
+                    source: "codex",
+                    kind: "other",
+                    name: "No calls indexed",
+                    server: null,
+                    agent: null,
+                    dayKey: "",
+                    count: 0,
+                    outcomeKnownCount: 0,
+                    successCount: 0,
+                    durationSampleCount: 0,
+                    durationMsTotal: 0
+                  }
+                ] satisfies CallAnalyticsEntry[]
+            ).map((entry) => (
+              <article key={`${entry.source}-${entry.kind}-${entry.name}-${entry.agent ?? "main"}`} className="surface-row">
+                <div>
+                  <strong>{entry.name}</strong>
+                  <span>
+                    {callSourceLabel(entry.source)} · {callKindLabel(entry.kind)}
+                    {entry.agent ? ` · ${entry.agent}` : ""}
+                  </span>
+                </div>
+                <span className="usage-total">{entry.count.toLocaleString()}</span>
+              </article>
+            ))}
           </div>
         </section>
 

@@ -165,6 +165,8 @@ The UI may be implemented in React/TypeScript, but the state machine should mirr
 | OpenCode config | Native Windows location if defined by upstream; fallback `%USERPROFILE%\.config\opencode\opencode.json[c]`; explicit override supported |
 | OpenCode call database inventory | `%LOCALAPPDATA%\opencode\opencode.db`, `%USERPROFILE%\.local\share\opencode\opencode.db`, `$XDG_DATA_HOME\opencode\opencode.db`, plus config-dir fallback |
 
+The Windows Call Analytics service emits the same core snapshot shape as the macOS engine: installed Skill/MCP inventory plus day/source/kind/name aggregated call entries. Claude and Codex read JSONL files directly; OpenCode copies `opencode.db` plus WAL/SHM sidecars to a temporary read-only SQLite snapshot before querying tool parts.
+
 ## Config Takeover Semantics
 
 Windows must preserve the current safety model:

@@ -1,7 +1,8 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet, HashMap},
     ffi::OsString,
-    fs, io,
+    fs,
+    io::{self, BufRead},
     path::{Path, PathBuf},
 };
 
@@ -15,6 +16,8 @@ use aiusage_platform::{
     AppPaths, CredentialVault, FilePermissionGuard, PlatformError, PlatformResult,
 };
 use aiusage_proxy::ProxyUsage;
+use chrono::{DateTime, Local, Utc};
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -179,7 +182,7 @@ pub struct ProxyUsageStats {
     pub updated_at_epoch_ms: Option<u128>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CallAnalyticsSource {
     Claude,
@@ -216,6 +219,71 @@ pub struct CallAnalyticsInventorySourceStatus {
 pub struct CallAnalyticsInventorySnapshot {
     pub generated_at_epoch_ms: u128,
     pub sources: Vec<CallAnalyticsInventorySourceStatus>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CallAnalyticsKind {
+    Mcp,
+    Skill,
+    Builtin,
+    WebSearch,
+    Other,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallAnalyticsEntry {
+    pub source: CallAnalyticsSource,
+    pub kind: CallAnalyticsKind,
+    pub name: String,
+    pub server: Option<String>,
+    pub agent: Option<String>,
+    pub day_key: String,
+    pub count: u64,
+    pub outcome_known_count: u64,
+    pub success_count: u64,
+    pub duration_sample_count: u64,
+    pub duration_ms_total: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallAnalyticsInstalledItem {
+    pub source: CallAnalyticsSource,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallAnalyticsAgentInvocation {
+    pub source: CallAnalyticsSource,
+    pub agent: String,
+    pub day_key: String,
+    pub count: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallAnalyticsSourceScanStatus {
+    pub source: CallAnalyticsSource,
+    pub available: bool,
+    pub event_count: u64,
+    pub files_scanned: usize,
+    pub error_code: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallAnalyticsSnapshot {
+    pub generated_at_epoch_ms: u128,
+    pub range_key: String,
+    pub entries: Vec<CallAnalyticsEntry>,
+    pub installed_skills: Vec<CallAnalyticsInstalledItem>,
+    pub installed_mcp_servers: Vec<CallAnalyticsInstalledItem>,
+    pub agent_invocations: Vec<CallAnalyticsAgentInvocation>,
+    pub sources: Vec<CallAnalyticsSourceScanStatus>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -655,6 +723,344 @@ where
         );
         push_unique_path(&mut dirs, self.paths.opencode_config_dir()?);
         Ok(dirs)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CallAnalyticsService<P> {
+    paths: P,
+}
+
+impl<P> CallAnalyticsService<P>
+where
+    P: AppPaths + Clone,
+{
+    pub fn new(paths: P) -> Self {
+        Self { paths }
+    }
+
+    pub fn snapshot(&self) -> ServiceResult<CallAnalyticsSnapshot> {
+        let inventory = CallAnalyticsInventoryService::new(self.paths.clone()).snapshot()?;
+        let mut entries = Vec::new();
+        let mut sources = Vec::new();
+        let mut agent_invocations = Vec::new();
+
+        let (claude_entries, claude_status, claude_agents) = self.collect_claude_calls()?;
+        entries.extend(claude_entries);
+        sources.push(claude_status);
+        agent_invocations.extend(claude_agents);
+
+        let (codex_entries, codex_status) = self.collect_codex_calls()?;
+        entries.extend(codex_entries);
+        sources.push(codex_status);
+
+        let opencode_servers = inventory
+            .sources
+            .iter()
+            .find(|row| row.source == CallAnalyticsSource::OpenCode)
+            .map(|row| {
+                row.mcp_server_names
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        let (opencode_entries, opencode_status) = self.collect_opencode_calls(&opencode_servers)?;
+        entries.extend(opencode_entries);
+        sources.push(opencode_status);
+
+        entries.sort_by(|left, right| {
+            (
+                &left.day_key,
+                source_sort_key(&left.source),
+                kind_sort_key(&left.kind),
+                &left.name,
+                &left.agent,
+            )
+                .cmp(&(
+                    &right.day_key,
+                    source_sort_key(&right.source),
+                    kind_sort_key(&right.kind),
+                    &right.name,
+                    &right.agent,
+                ))
+        });
+        agent_invocations.sort_by(|left, right| {
+            (&left.day_key, source_sort_key(&left.source), &left.agent).cmp(&(
+                &right.day_key,
+                source_sort_key(&right.source),
+                &right.agent,
+            ))
+        });
+
+        Ok(CallAnalyticsSnapshot {
+            generated_at_epoch_ms: epoch_ms(),
+            range_key: "all".into(),
+            entries,
+            installed_skills: inventory
+                .sources
+                .iter()
+                .flat_map(|row| {
+                    row.skill_names
+                        .iter()
+                        .cloned()
+                        .map(|name| CallAnalyticsInstalledItem {
+                            source: row.source.clone(),
+                            name,
+                        })
+                })
+                .collect(),
+            installed_mcp_servers: inventory
+                .sources
+                .iter()
+                .flat_map(|row| {
+                    row.mcp_server_names
+                        .iter()
+                        .cloned()
+                        .map(|name| CallAnalyticsInstalledItem {
+                            source: row.source.clone(),
+                            name,
+                        })
+                })
+                .collect(),
+            agent_invocations,
+            sources,
+        })
+    }
+
+    fn collect_claude_calls(
+        &self,
+    ) -> ServiceResult<(
+        Vec<CallAnalyticsEntry>,
+        CallAnalyticsSourceScanStatus,
+        Vec<CallAnalyticsAgentInvocation>,
+    )> {
+        let roots = vec![
+            self.paths
+                .user_home()?
+                .join(".config")
+                .join("claude")
+                .join("projects"),
+            self.paths.claude_home()?.join("projects"),
+        ];
+        let existing_roots = roots
+            .into_iter()
+            .filter(|path| path.exists())
+            .collect::<Vec<_>>();
+        if existing_roots.is_empty() {
+            return Ok((
+                Vec::new(),
+                CallAnalyticsSourceScanStatus {
+                    source: CallAnalyticsSource::Claude,
+                    available: false,
+                    event_count: 0,
+                    files_scanned: 0,
+                    error_code: None,
+                    warnings: Vec::new(),
+                },
+                Vec::new(),
+            ));
+        }
+
+        let mut warnings = Vec::new();
+        let files = collect_jsonl_files(&existing_roots, &mut warnings);
+        let mut accumulator = CallEventAccumulator::default();
+        let mut invocations_by_day = BTreeMap::<(String, String), u64>::new();
+
+        for file in &files {
+            let fallback_day_key = file_day_key(file);
+            let is_subagent_file = has_path_component(file, "subagents");
+            let subagent_type = is_subagent_file
+                .then(|| read_claude_subagent_type(file))
+                .flatten();
+            let agent_name = if is_subagent_file {
+                subagent_type.clone().unwrap_or_else(|| "subagent".into())
+            } else {
+                "main".into()
+            };
+            let mut pending = HashMap::<String, PendingCall>::new();
+            let mut earliest_day_key: Option<String> = None;
+            if let Err(error) = for_each_matching_line(
+                file,
+                &["\"tool_use\"", "\"tool_result\""],
+                4 * 1024 * 1024,
+                |line| {
+                    parse_claude_line(
+                        line,
+                        &fallback_day_key,
+                        is_subagent_file,
+                        subagent_type.as_deref(),
+                        &mut pending,
+                        &mut earliest_day_key,
+                        &mut accumulator,
+                    );
+                },
+            ) {
+                warnings.push(format!("{}: {}", file.display(), error));
+            }
+
+            for call in pending.into_values() {
+                accumulator.add(call);
+            }
+            let invocation_day = earliest_day_key.unwrap_or(fallback_day_key);
+            *invocations_by_day
+                .entry((invocation_day, agent_name))
+                .or_default() += 1;
+        }
+
+        let event_count = accumulator.event_count;
+        Ok((
+            accumulator.entries(),
+            CallAnalyticsSourceScanStatus {
+                source: CallAnalyticsSource::Claude,
+                available: true,
+                event_count,
+                files_scanned: files.len(),
+                error_code: None,
+                warnings,
+            },
+            invocations_by_day
+                .into_iter()
+                .map(|((day_key, agent), count)| CallAnalyticsAgentInvocation {
+                    source: CallAnalyticsSource::Claude,
+                    agent,
+                    day_key,
+                    count,
+                })
+                .collect(),
+        ))
+    }
+
+    fn collect_codex_calls(
+        &self,
+    ) -> ServiceResult<(Vec<CallAnalyticsEntry>, CallAnalyticsSourceScanStatus)> {
+        let codex_home = self.paths.codex_home()?;
+        let roots = vec![
+            codex_home.join("sessions"),
+            codex_home.join("archived_sessions"),
+        ];
+        let existing_roots = roots
+            .into_iter()
+            .filter(|path| path.exists())
+            .collect::<Vec<_>>();
+        if existing_roots.is_empty() {
+            return Ok((
+                Vec::new(),
+                CallAnalyticsSourceScanStatus {
+                    source: CallAnalyticsSource::Codex,
+                    available: false,
+                    event_count: 0,
+                    files_scanned: 0,
+                    error_code: None,
+                    warnings: Vec::new(),
+                },
+            ));
+        }
+
+        let mut warnings = Vec::new();
+        let files = collect_jsonl_files(&existing_roots, &mut warnings);
+        let mut accumulator = CallEventAccumulator::default();
+
+        for file in &files {
+            let fallback_day_key = file_day_key(file);
+            if let Err(error) = for_each_matching_line(
+                file,
+                &["\"function_call\"", "\"mcp_tool_call_end\""],
+                256 * 1024,
+                |line| parse_codex_line(line, &fallback_day_key, &mut accumulator),
+            ) {
+                warnings.push(format!("{}: {}", file.display(), error));
+            }
+        }
+
+        let event_count = accumulator.event_count;
+        Ok((
+            accumulator.entries(),
+            CallAnalyticsSourceScanStatus {
+                source: CallAnalyticsSource::Codex,
+                available: true,
+                event_count,
+                files_scanned: files.len(),
+                error_code: None,
+                warnings,
+            },
+        ))
+    }
+
+    fn collect_opencode_calls(
+        &self,
+        known_mcp_servers: &BTreeSet<String>,
+    ) -> ServiceResult<(Vec<CallAnalyticsEntry>, CallAnalyticsSourceScanStatus)> {
+        let data_dirs =
+            CallAnalyticsInventoryService::new(self.paths.clone()).opencode_data_dirs()?;
+        let Some(database_path) = data_dirs
+            .into_iter()
+            .map(|dir| dir.join("opencode.db"))
+            .find(|path| path.is_file())
+        else {
+            return Ok((
+                Vec::new(),
+                CallAnalyticsSourceScanStatus {
+                    source: CallAnalyticsSource::OpenCode,
+                    available: false,
+                    event_count: 0,
+                    files_scanned: 0,
+                    error_code: None,
+                    warnings: Vec::new(),
+                },
+            ));
+        };
+
+        let snapshot_path = match copy_sqlite_snapshot(&database_path) {
+            Ok(path) => path,
+            Err(error) => {
+                return Ok((
+                    Vec::new(),
+                    CallAnalyticsSourceScanStatus {
+                        source: CallAnalyticsSource::OpenCode,
+                        available: true,
+                        event_count: 0,
+                        files_scanned: 0,
+                        error_code: Some("db_snapshot_failed".into()),
+                        warnings: vec![format!("{}: {}", database_path.display(), error)],
+                    },
+                ));
+            }
+        };
+
+        let mut accumulator = CallEventAccumulator::default();
+        let mut warnings = Vec::new();
+        let result =
+            collect_opencode_tool_parts(&snapshot_path, known_mcp_servers, &mut accumulator);
+        cleanup_sqlite_snapshot(&snapshot_path);
+
+        if let Err(error) = result {
+            warnings.push(format!("{}: {}", database_path.display(), error));
+            return Ok((
+                Vec::new(),
+                CallAnalyticsSourceScanStatus {
+                    source: CallAnalyticsSource::OpenCode,
+                    available: true,
+                    event_count: 0,
+                    files_scanned: 1,
+                    error_code: Some("db_query_failed".into()),
+                    warnings,
+                },
+            ));
+        }
+
+        let event_count = accumulator.event_count;
+        Ok((
+            accumulator.entries(),
+            CallAnalyticsSourceScanStatus {
+                source: CallAnalyticsSource::OpenCode,
+                available: true,
+                event_count,
+                files_scanned: 1,
+                error_code: None,
+                warnings,
+            },
+        ))
     }
 }
 
@@ -1367,6 +1773,922 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     }
 }
 
+#[derive(Clone, Debug)]
+struct PendingCall {
+    source: CallAnalyticsSource,
+    kind: CallAnalyticsKind,
+    name: String,
+    server: Option<String>,
+    agent: Option<String>,
+    day_key: String,
+    success: Option<bool>,
+    duration_ms: Option<f64>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct CallEventKey {
+    source: CallAnalyticsSource,
+    kind: CallAnalyticsKind,
+    name: String,
+    server: Option<String>,
+    agent: Option<String>,
+    day_key: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CallEventAggregate {
+    count: u64,
+    outcome_known_count: u64,
+    success_count: u64,
+    duration_sample_count: u64,
+    duration_ms_total: f64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CallEventAccumulator {
+    counts: HashMap<CallEventKey, CallEventAggregate>,
+    event_count: u64,
+}
+
+impl CallEventAccumulator {
+    fn add(&mut self, call: PendingCall) {
+        let key = CallEventKey {
+            source: call.source,
+            kind: call.kind,
+            name: call.name,
+            server: call.server,
+            agent: call.agent,
+            day_key: call.day_key,
+        };
+        let aggregate = self.counts.entry(key).or_default();
+        aggregate.count = aggregate.count.saturating_add(1);
+        if let Some(success) = call.success {
+            aggregate.outcome_known_count = aggregate.outcome_known_count.saturating_add(1);
+            if success {
+                aggregate.success_count = aggregate.success_count.saturating_add(1);
+            }
+        }
+        if let Some(duration_ms) = call.duration_ms.filter(|duration| *duration >= 0.0) {
+            aggregate.duration_sample_count = aggregate.duration_sample_count.saturating_add(1);
+            aggregate.duration_ms_total += duration_ms;
+        }
+        self.event_count = self.event_count.saturating_add(1);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_parts(
+        &mut self,
+        source: CallAnalyticsSource,
+        kind: CallAnalyticsKind,
+        name: impl Into<String>,
+        server: Option<String>,
+        agent: Option<String>,
+        day_key: impl Into<String>,
+        success: Option<bool>,
+        duration_ms: Option<f64>,
+    ) {
+        self.add(PendingCall {
+            source,
+            kind,
+            name: name.into(),
+            server,
+            agent,
+            day_key: day_key.into(),
+            success,
+            duration_ms,
+        });
+    }
+
+    fn entries(self) -> Vec<CallAnalyticsEntry> {
+        self.counts
+            .into_iter()
+            .map(|(key, aggregate)| CallAnalyticsEntry {
+                source: key.source,
+                kind: key.kind,
+                name: key.name,
+                server: key.server,
+                agent: key.agent,
+                day_key: key.day_key,
+                count: aggregate.count,
+                outcome_known_count: aggregate.outcome_known_count,
+                success_count: aggregate.success_count,
+                duration_sample_count: aggregate.duration_sample_count,
+                duration_ms_total: aggregate.duration_ms_total,
+            })
+            .collect()
+    }
+}
+
+fn collect_jsonl_files(roots: &[PathBuf], warnings: &mut Vec<String>) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut seen = BTreeSet::<PathBuf>::new();
+    for root in roots {
+        collect_jsonl_files_in_dir(root, &mut seen, &mut files, warnings);
+    }
+    files
+}
+
+fn collect_jsonl_files_in_dir(
+    directory: &Path,
+    seen: &mut BTreeSet<PathBuf>,
+    files: &mut Vec<PathBuf>,
+    warnings: &mut Vec<String>,
+) {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) => {
+            warnings.push(format!("{}: {}", directory.display(), error));
+            return;
+        }
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                warnings.push(format!("{}: {}", directory.display(), error));
+                continue;
+            }
+        };
+        let path = entry.path();
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if SKIP_SCAN_DIRECTORIES.contains(&file_name.as_str()) {
+            continue;
+        }
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                warnings.push(format!("{}: {}", path.display(), error));
+                continue;
+            }
+        };
+        if file_type.is_dir() {
+            collect_jsonl_files_in_dir(&path, seen, files, warnings);
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
+            && seen.insert(path.clone())
+        {
+            files.push(path);
+        }
+    }
+}
+
+fn for_each_matching_line(
+    path: &Path,
+    needles: &[&str],
+    max_line_bytes: usize,
+    mut on_line: impl FnMut(&[u8]),
+) -> io::Result<()> {
+    let file = fs::File::open(path)?;
+    let reader = io::BufReader::new(file);
+    let needle_bytes = needles
+        .iter()
+        .map(|needle| needle.as_bytes())
+        .collect::<Vec<_>>();
+    for line in reader.split(b'\n') {
+        let mut line = line?;
+        if line.ends_with(b"\r") {
+            line.pop();
+        }
+        if line.len() > max_line_bytes {
+            line.truncate(max_line_bytes);
+        }
+        if needle_bytes.is_empty()
+            || needle_bytes
+                .iter()
+                .any(|needle| contains_bytes(&line, needle))
+        {
+            on_line(&line);
+        }
+    }
+    Ok(())
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
+}
+
+fn parse_claude_line(
+    line: &[u8],
+    fallback_day_key: &str,
+    is_subagent_file: bool,
+    subagent_type: Option<&str>,
+    pending: &mut HashMap<String, PendingCall>,
+    earliest_day_key: &mut Option<String>,
+    accumulator: &mut CallEventAccumulator,
+) {
+    let Ok(value) = serde_json::from_slice::<Value>(line) else {
+        return;
+    };
+    let Some(kind) = value.get("type").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(content) = value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+
+    match kind {
+        "assistant" => {
+            let day_key = value
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .and_then(day_key_from_iso)
+                .unwrap_or_else(|| fallback_day_key.to_string());
+            if earliest_day_key
+                .as_ref()
+                .map(|existing| &day_key < existing)
+                .unwrap_or(true)
+            {
+                *earliest_day_key = Some(day_key.clone());
+            }
+            let agent = if is_subagent_file {
+                subagent_type.unwrap_or("subagent").to_string()
+            } else if value
+                .get("isSidechain")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                "subagent".into()
+            } else {
+                "main".into()
+            };
+
+            for item in content {
+                if item.get("type").and_then(Value::as_str) != Some("tool_use") {
+                    continue;
+                }
+                let Some(raw_name) = item.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                if raw_name.trim().is_empty() {
+                    continue;
+                }
+                let call = make_claude_call(raw_name, item.get("input"), &agent, &day_key);
+                if let Some(id) = item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                {
+                    pending.insert(id.to_string(), call);
+                } else {
+                    accumulator.add(call);
+                }
+            }
+        }
+        "user" => {
+            for item in content {
+                if item.get("type").and_then(Value::as_str) != Some("tool_result") {
+                    continue;
+                }
+                let Some(id) = item.get("tool_use_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                if let Some(mut call) = pending.remove(id) {
+                    call.success = Some(
+                        !item
+                            .get("is_error")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    );
+                    accumulator.add(call);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn make_claude_call(
+    raw_name: &str,
+    input: Option<&Value>,
+    agent: &str,
+    day_key: &str,
+) -> PendingCall {
+    if let Some((server, tool)) = parse_claude_mcp(raw_name) {
+        return PendingCall {
+            source: CallAnalyticsSource::Claude,
+            kind: CallAnalyticsKind::Mcp,
+            name: mcp_display_name(&server, &tool),
+            server: Some(server),
+            agent: Some(agent.to_string()),
+            day_key: day_key.to_string(),
+            success: None,
+            duration_ms: None,
+        };
+    }
+
+    if raw_name == "Skill" {
+        let skill_name = input
+            .and_then(|input| input.get("skill"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or("(unknown)");
+        return PendingCall {
+            source: CallAnalyticsSource::Claude,
+            kind: CallAnalyticsKind::Skill,
+            name: skill_name.to_string(),
+            server: None,
+            agent: Some(agent.to_string()),
+            day_key: day_key.to_string(),
+            success: None,
+            duration_ms: None,
+        };
+    }
+
+    PendingCall {
+        source: CallAnalyticsSource::Claude,
+        kind: if matches!(raw_name, "WebSearch" | "WebFetch") {
+            CallAnalyticsKind::WebSearch
+        } else {
+            CallAnalyticsKind::Builtin
+        },
+        name: raw_name.to_string(),
+        server: None,
+        agent: Some(agent.to_string()),
+        day_key: day_key.to_string(),
+        success: None,
+        duration_ms: None,
+    }
+}
+
+fn parse_codex_line(line: &[u8], fallback_day_key: &str, accumulator: &mut CallEventAccumulator) {
+    let text = String::from_utf8_lossy(line);
+    let day_key = extract_json_string(&text, "timestamp")
+        .and_then(|timestamp| day_key_from_iso(&timestamp))
+        .unwrap_or_else(|| fallback_day_key.to_string());
+
+    if text.contains("\"mcp_tool_call_end\"") {
+        let Some(invocation) = extract_json_object_text(&text, "invocation") else {
+            return;
+        };
+        let Some(server) = extract_json_string(&invocation, "server")
+            .map(|server| server.trim().to_string())
+            .filter(|server| !server.is_empty())
+        else {
+            return;
+        };
+        let Some(tool) = extract_json_string(&invocation, "tool")
+            .map(|tool| tool.trim().to_string())
+            .filter(|tool| !tool.is_empty())
+        else {
+            return;
+        };
+        let success = extract_json_object_text(&text, "result")
+            .and_then(|result| first_json_object_key(&result))
+            .and_then(|key| match key.as_str() {
+                "Ok" => Some(true),
+                "Err" => Some(false),
+                _ => None,
+            });
+        let duration_ms = extract_json_object_text(&text, "duration").and_then(|duration| {
+            let secs = extract_json_i64(&duration, "secs").unwrap_or(0);
+            let nanos = extract_json_i64(&duration, "nanos").unwrap_or(0);
+            (secs != 0 || nanos != 0).then_some(secs as f64 * 1000.0 + nanos as f64 / 1_000_000.0)
+        });
+        accumulator.add_parts(
+            CallAnalyticsSource::Codex,
+            CallAnalyticsKind::Mcp,
+            mcp_display_name(&server, &tool),
+            Some(server),
+            None,
+            day_key,
+            success,
+            duration_ms,
+        );
+        return;
+    }
+
+    if text.contains("\"function_call\"") {
+        if let Some(name) = extract_json_string(&text, "name")
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+        {
+            accumulator.add_parts(
+                CallAnalyticsSource::Codex,
+                CallAnalyticsKind::Builtin,
+                name,
+                None,
+                None,
+                day_key.clone(),
+                None,
+                None,
+            );
+        }
+        for skill in codex_skill_reads(&text) {
+            accumulator.add_parts(
+                CallAnalyticsSource::Codex,
+                CallAnalyticsKind::Skill,
+                skill,
+                None,
+                None,
+                day_key.clone(),
+                None,
+                None,
+            );
+        }
+    }
+}
+
+fn collect_opencode_tool_parts(
+    database_path: &Path,
+    known_mcp_servers: &BTreeSet<String>,
+    accumulator: &mut CallEventAccumulator,
+) -> rusqlite::Result<()> {
+    let connection = Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut statement = connection
+        .prepare("SELECT time_created, data FROM part WHERE data LIKE '%\"type\":\"tool\"%'")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let millis: i64 = row.get(0)?;
+        let data: String = row.get(1)?;
+        parse_opencode_part(&data, millis, known_mcp_servers, accumulator);
+    }
+    Ok(())
+}
+
+fn parse_opencode_part(
+    data: &str,
+    millis: i64,
+    known_mcp_servers: &BTreeSet<String>,
+    accumulator: &mut CallEventAccumulator,
+) {
+    let Ok(value) = serde_json::from_str::<Value>(data) else {
+        return;
+    };
+    if value.get("type").and_then(Value::as_str) != Some("tool") {
+        return;
+    }
+    let Some(tool) = value
+        .get("tool")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|tool| !tool.is_empty())
+    else {
+        return;
+    };
+    let day_key = day_key_from_epoch_millis(millis);
+    let state = value.get("state");
+    let success = state
+        .and_then(|state| state.get("status"))
+        .and_then(Value::as_str)
+        .and_then(|status| match status.to_ascii_lowercase().as_str() {
+            "completed" => Some(true),
+            "error" => Some(false),
+            _ => None,
+        });
+    let duration_ms = state.and_then(|state| state.get("time")).and_then(|time| {
+        let start = time.get("start").and_then(Value::as_f64)?;
+        let end = time.get("end").and_then(Value::as_f64)?;
+        (end >= start).then_some(end - start)
+    });
+    classify_opencode_tool(
+        tool,
+        state,
+        &day_key,
+        known_mcp_servers,
+        success,
+        duration_ms,
+        accumulator,
+    );
+}
+
+fn classify_opencode_tool(
+    tool: &str,
+    state: Option<&Value>,
+    day_key: &str,
+    known_mcp_servers: &BTreeSet<String>,
+    success: Option<bool>,
+    duration_ms: Option<f64>,
+    accumulator: &mut CallEventAccumulator,
+) {
+    const BUILTIN_TOOLS: &[&str] = &[
+        "read",
+        "write",
+        "edit",
+        "multiedit",
+        "bash",
+        "glob",
+        "grep",
+        "list",
+        "webfetch",
+        "patch",
+        "task",
+        "question",
+        "todowrite",
+        "todoread",
+        "invalid",
+    ];
+
+    let lower = tool.to_ascii_lowercase();
+    if lower == "skill" {
+        let skill_name = state
+            .and_then(|state| state.get("input"))
+            .and_then(|input| input.get("name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or("(unknown)");
+        accumulator.add_parts(
+            CallAnalyticsSource::OpenCode,
+            CallAnalyticsKind::Skill,
+            skill_name,
+            None,
+            None,
+            day_key,
+            success,
+            duration_ms,
+        );
+        return;
+    }
+
+    if BUILTIN_TOOLS.contains(&lower.as_str()) {
+        accumulator.add_parts(
+            CallAnalyticsSource::OpenCode,
+            if lower == "webfetch" {
+                CallAnalyticsKind::WebSearch
+            } else {
+                CallAnalyticsKind::Builtin
+            },
+            tool,
+            None,
+            None,
+            day_key,
+            success,
+            duration_ms,
+        );
+        return;
+    }
+
+    if let Some((server, tool_name)) = match_known_opencode_server(tool, known_mcp_servers) {
+        accumulator.add_parts(
+            CallAnalyticsSource::OpenCode,
+            CallAnalyticsKind::Mcp,
+            mcp_display_name(&server, &tool_name),
+            Some(server),
+            None,
+            day_key,
+            success,
+            duration_ms,
+        );
+        return;
+    }
+
+    if let Some(separator) = tool.find('_') {
+        let server = tool[..separator].trim();
+        let tool_name = tool[separator + 1..].trim();
+        if !server.is_empty() && !tool_name.is_empty() {
+            accumulator.add_parts(
+                CallAnalyticsSource::OpenCode,
+                CallAnalyticsKind::Mcp,
+                mcp_display_name(server, tool_name),
+                Some(server.to_string()),
+                None,
+                day_key,
+                success,
+                duration_ms,
+            );
+            return;
+        }
+    }
+
+    accumulator.add_parts(
+        CallAnalyticsSource::OpenCode,
+        CallAnalyticsKind::Other,
+        tool,
+        None,
+        None,
+        day_key,
+        success,
+        duration_ms,
+    );
+}
+
+fn match_known_opencode_server(
+    tool: &str,
+    known_mcp_servers: &BTreeSet<String>,
+) -> Option<(String, String)> {
+    let mut servers = known_mcp_servers.iter().collect::<Vec<_>>();
+    servers.sort_by_key(|server| std::cmp::Reverse(server.len()));
+    for server in servers {
+        for candidate in [server.to_string(), server.replace('-', "_")] {
+            let prefix = format!("{candidate}_");
+            if let Some(tool_name) = tool.strip_prefix(&prefix).filter(|name| !name.is_empty()) {
+                return Some((server.clone(), tool_name.to_string()));
+            }
+        }
+    }
+    None
+}
+
+fn extract_json_string(text: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let bytes = text.as_bytes();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        let relative = text[cursor..].find(&needle)?;
+        let mut index = cursor + relative + needle.len();
+        skip_json_whitespace(bytes, &mut index);
+        if bytes.get(index) != Some(&b':') {
+            cursor = index;
+            continue;
+        }
+        index += 1;
+        skip_json_whitespace(bytes, &mut index);
+        if bytes.get(index) != Some(&b'"') {
+            cursor = index;
+            continue;
+        }
+        index += 1;
+        let mut output = String::new();
+        let mut escaped = false;
+        while index < bytes.len() {
+            let byte = bytes[index];
+            index += 1;
+            if escaped {
+                output.push(match byte {
+                    b'n' => '\n',
+                    b't' => '\t',
+                    b'r' => '\r',
+                    b'"' => '"',
+                    b'\\' => '\\',
+                    b'/' => '/',
+                    other => other as char,
+                });
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                return Some(output);
+            } else {
+                output.push(byte as char);
+            }
+        }
+        return None;
+    }
+    None
+}
+
+fn extract_json_i64(text: &str, key: &str) -> Option<i64> {
+    let needle = format!("\"{key}\"");
+    let bytes = text.as_bytes();
+    let relative = text.find(&needle)?;
+    let mut index = relative + needle.len();
+    skip_json_whitespace(bytes, &mut index);
+    if bytes.get(index) != Some(&b':') {
+        return None;
+    }
+    index += 1;
+    skip_json_whitespace(bytes, &mut index);
+    let start = index;
+    if bytes.get(index) == Some(&b'-') {
+        index += 1;
+    }
+    while bytes.get(index).is_some_and(|byte| byte.is_ascii_digit()) {
+        index += 1;
+    }
+    (index > start)
+        .then(|| text[start..index].parse().ok())
+        .flatten()
+}
+
+fn extract_json_object_text(text: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let bytes = text.as_bytes();
+    let relative = text.find(&needle)?;
+    let mut index = relative + needle.len();
+    skip_json_whitespace(bytes, &mut index);
+    if bytes.get(index) != Some(&b':') {
+        return None;
+    }
+    index += 1;
+    skip_json_whitespace(bytes, &mut index);
+    if bytes.get(index) != Some(&b'{') {
+        return None;
+    }
+
+    let start = index;
+    let mut depth = 0_i32;
+    let mut in_string = false;
+    let mut escaped = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+        } else if byte == b'"' {
+            in_string = true;
+        } else if byte == b'{' {
+            depth += 1;
+        } else if byte == b'}' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(text[start..=index].to_string());
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+fn first_json_object_key(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    skip_json_whitespace(bytes, &mut index);
+    if bytes.get(index) != Some(&b'{') {
+        return None;
+    }
+    index += 1;
+    skip_json_whitespace(bytes, &mut index);
+    if bytes.get(index) != Some(&b'"') {
+        return None;
+    }
+    index += 1;
+    let start = index;
+    let mut escaped = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' {
+            escaped = true;
+        } else if byte == b'"' {
+            return Some(text[start..index].to_string());
+        }
+        index += 1;
+    }
+    None
+}
+
+fn skip_json_whitespace(bytes: &[u8], index: &mut usize) {
+    while bytes
+        .get(*index)
+        .is_some_and(|byte| byte.is_ascii_whitespace())
+    {
+        *index += 1;
+    }
+}
+
+fn codex_skill_reads(text: &str) -> Vec<String> {
+    let text = text.replace("\\/", "/");
+    let marker = "/SKILL.md";
+    let mut names = BTreeSet::new();
+    let mut cursor = 0;
+    while let Some(relative) = text[cursor..].find(marker) {
+        let marker_start = cursor + relative;
+        cursor = marker_start + marker.len();
+        let before = &text[..marker_start];
+        let Some(name_slash) = before.rfind('/') else {
+            continue;
+        };
+        let name = &before[name_slash + 1..];
+        let parent = &before[..name_slash];
+        if (parent.ends_with("/skills") || parent == "skills")
+            && !name.is_empty()
+            && name != ".system"
+            && !before.contains("/.system/")
+            && name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+        {
+            names.insert(name.to_string());
+        }
+    }
+    names.into_iter().collect()
+}
+
+fn parse_claude_mcp(raw: &str) -> Option<(String, String)> {
+    let body = raw.strip_prefix("mcp__")?;
+    let Some(separator) = body.find("__") else {
+        return Some((body.to_string(), body.to_string()));
+    };
+    let server = body[..separator].to_string();
+    let tool = body[separator + 2..].trim();
+    Some((
+        server.clone(),
+        if tool.is_empty() {
+            server
+        } else {
+            tool.to_string()
+        },
+    ))
+}
+
+fn mcp_display_name(server: &str, tool: &str) -> String {
+    format!("{server}/{tool}")
+}
+
+fn read_claude_subagent_type(path: &Path) -> Option<String> {
+    let meta_path = path.with_extension("meta.json");
+    let text = fs::read_to_string(meta_path).ok()?;
+    let value = serde_json::from_str::<Value>(&text).ok()?;
+    value
+        .get("agentType")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|agent| !agent.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn has_path_component(path: &Path, needle: &str) -> bool {
+    path.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|component| component.eq_ignore_ascii_case(needle))
+    })
+}
+
+fn copy_sqlite_snapshot(source: &Path) -> io::Result<PathBuf> {
+    let snapshot = std::env::temp_dir().join(format!(
+        "aiusage-callanalytics-{}-{}.db",
+        std::process::id(),
+        epoch_ms()
+    ));
+    fs::copy(source, &snapshot)?;
+    for suffix in ["-wal", "-shm"] {
+        let source_sidecar = path_with_appended_suffix(source, suffix);
+        if source_sidecar.exists() {
+            let _ = fs::copy(source_sidecar, path_with_appended_suffix(&snapshot, suffix));
+        }
+    }
+    Ok(snapshot)
+}
+
+fn cleanup_sqlite_snapshot(snapshot: &Path) {
+    let _ = fs::remove_file(snapshot);
+    for suffix in ["-wal", "-shm"] {
+        let _ = fs::remove_file(path_with_appended_suffix(snapshot, suffix));
+    }
+}
+
+fn path_with_appended_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut raw = OsString::from(path.as_os_str());
+    raw.push(suffix);
+    PathBuf::from(raw)
+}
+
+fn day_key_from_iso(text: &str) -> Option<String> {
+    DateTime::parse_from_rfc3339(text)
+        .ok()
+        .map(|date| date.with_timezone(&Local).format("%Y-%m-%d").to_string())
+}
+
+fn day_key_from_epoch_millis(millis: i64) -> String {
+    DateTime::<Utc>::from_timestamp_millis(millis)
+        .unwrap_or_else(Utc::now)
+        .with_timezone(&Local)
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
+fn file_day_key(path: &Path) -> String {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .map(|modified| {
+            DateTime::<Local>::from(modified)
+                .format("%Y-%m-%d")
+                .to_string()
+        })
+        .unwrap_or_else(|_| Local::now().format("%Y-%m-%d").to_string())
+}
+
+fn source_sort_key(source: &CallAnalyticsSource) -> u8 {
+    match source {
+        CallAnalyticsSource::Claude => 0,
+        CallAnalyticsSource::Codex => 1,
+        CallAnalyticsSource::OpenCode => 2,
+    }
+}
+
+fn kind_sort_key(kind: &CallAnalyticsKind) -> u8 {
+    match kind {
+        CallAnalyticsKind::Mcp => 0,
+        CallAnalyticsKind::Skill => 1,
+        CallAnalyticsKind::Builtin => 2,
+        CallAnalyticsKind::WebSearch => 3,
+        CallAnalyticsKind::Other => 4,
+    }
+}
+
 fn validate_credential_request(request: &UpsertCredentialRequest) -> ServiceResult<()> {
     if request.provider_id.trim().is_empty() {
         return Err(ServiceError::InvalidRequest(
@@ -1817,6 +3139,115 @@ mod tests {
     }
 
     #[test]
+    fn call_analytics_snapshot_aggregates_claude_codex_and_opencode_events() {
+        let temp = TempDir::new().expect("tempdir");
+        let root = temp.path();
+
+        let claude_project = root.join(".claude").join("projects").join("workspace");
+        fs::create_dir_all(&claude_project).expect("claude project dir");
+        fs::write(
+            claude_project.join("session.jsonl"),
+            [
+                r#"{"type":"assistant","timestamp":"2026-07-01T10:00:00Z","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"mcp__fs__read","input":{}},{"type":"tool_use","id":"toolu_2","name":"Skill","input":{"skill":"briefing"}},{"type":"tool_use","name":"WebSearch","input":{}}]}}"#,
+                r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","is_error":false},{"type":"tool_result","tool_use_id":"toolu_2","is_error":true}]}}"#,
+            ]
+            .join("\n"),
+        )
+        .expect("claude session");
+
+        let codex_sessions = root.join(".codex").join("sessions");
+        fs::create_dir_all(&codex_sessions).expect("codex sessions");
+        fs::write(
+            codex_sessions.join("session.jsonl"),
+            [
+                r#"{"timestamp":"2026-07-01T10:01:00Z","event_msg":{"type":"mcp_tool_call_end","invocation":{"server":"docs","tool":"search"},"result":{"Ok":{}},"duration":{"secs":1,"nanos":500000000}}}"#,
+                r#"{"timestamp":"2026-07-01T10:02:00Z","response_item":{"payload":{"type":"function_call","name":"exec_command","arguments":"cat C:/Users/me/.codex/skills/review/SKILL.md"}}}"#,
+            ]
+            .join("\n"),
+        )
+        .expect("codex session");
+
+        let opencode_config = root.join(".config").join("opencode");
+        fs::create_dir_all(&opencode_config).expect("opencode config dir");
+        fs::write(
+            opencode_config.join("opencode.jsonc"),
+            r#"{"mcp":{"context7":{}}}"#,
+        )
+        .expect("opencode config");
+        let opencode_data = root.join("localappdata").join("opencode");
+        fs::create_dir_all(&opencode_data).expect("opencode data");
+        let db = Connection::open(opencode_data.join("opencode.db")).expect("open db");
+        db.execute(
+            "CREATE TABLE part (time_created INTEGER NOT NULL, data TEXT NOT NULL)",
+            [],
+        )
+        .expect("create part");
+        db.execute(
+            "INSERT INTO part (time_created, data) VALUES (?1, ?2)",
+            (
+                1_783_030_400_000_i64,
+                r#"{"type":"tool","tool":"context7_lookup","state":{"status":"completed","time":{"start":1000,"end":1250}}}"#,
+            ),
+        )
+        .expect("insert part");
+        drop(db);
+
+        let service = CallAnalyticsService::new(TestPaths::new(root.to_path_buf()));
+        let snapshot = service.snapshot().expect("snapshot");
+        assert_eq!(snapshot.sources.len(), 3);
+        assert!(snapshot
+            .sources
+            .iter()
+            .all(|source| source.available && source.error_code.is_none()));
+
+        let claude_mcp = find_call(
+            &snapshot,
+            CallAnalyticsSource::Claude,
+            CallAnalyticsKind::Mcp,
+            "fs/read",
+        );
+        assert_eq!(claude_mcp.count, 1);
+        assert_eq!(claude_mcp.success_count, 1);
+
+        let claude_skill = find_call(
+            &snapshot,
+            CallAnalyticsSource::Claude,
+            CallAnalyticsKind::Skill,
+            "briefing",
+        );
+        assert_eq!(claude_skill.count, 1);
+        assert_eq!(claude_skill.outcome_known_count, 1);
+        assert_eq!(claude_skill.success_count, 0);
+
+        let codex_mcp = find_call(
+            &snapshot,
+            CallAnalyticsSource::Codex,
+            CallAnalyticsKind::Mcp,
+            "docs/search",
+        );
+        assert_eq!(codex_mcp.count, 1);
+        assert_eq!(codex_mcp.duration_sample_count, 1);
+        assert_eq!(codex_mcp.duration_ms_total, 1500.0);
+
+        let codex_skill = find_call(
+            &snapshot,
+            CallAnalyticsSource::Codex,
+            CallAnalyticsKind::Skill,
+            "review",
+        );
+        assert_eq!(codex_skill.count, 1);
+
+        let opencode_mcp = find_call(
+            &snapshot,
+            CallAnalyticsSource::OpenCode,
+            CallAnalyticsKind::Mcp,
+            "context7/lookup",
+        );
+        assert_eq!(opencode_mcp.count, 1);
+        assert_eq!(opencode_mcp.duration_ms_total, 250.0);
+    }
+
+    #[test]
     fn credential_registry_stores_summaries_without_exposing_secret() {
         let registry = CredentialRegistry::new(MemoryVault::default());
         let summary = registry
@@ -1909,6 +3340,19 @@ mod tests {
             .iter()
             .find(|row| row.source == source)
             .expect("inventory source")
+    }
+
+    fn find_call<'a>(
+        snapshot: &'a CallAnalyticsSnapshot,
+        source: CallAnalyticsSource,
+        kind: CallAnalyticsKind,
+        name: &str,
+    ) -> &'a CallAnalyticsEntry {
+        snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.source == source && entry.kind == kind && entry.name == name)
+            .expect("call analytics entry")
     }
 
     fn node() -> OpenCodeManagedNode {
