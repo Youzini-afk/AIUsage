@@ -104,6 +104,7 @@ Deliverables:
 - Call Analytics.
 - Inbox.
 - Settings.
+- Config takeover control panel for target path, backup, parse-warning, and restore visibility.
 - Tray menu and background behavior. The current Tauri shell implements Show AIUsage, Open Settings, Quit AIUsage, click-to-restore, close-to-tray, and explicit quit bypass; tray refresh/proxy shortcuts remain part of UI parity work.
 
 Completion criteria:
@@ -112,6 +113,7 @@ Completion criteria:
 - Major workflows are covered by automated E2E tests and manual QA checklist.
 - Long-running refresh/proxy operations stream progress and errors to the UI.
 - Platform environment status is visible for Windows path/WSL/proxy/browser-profile/default-port troubleshooting.
+- Config takeover state is visible before restore actions, including target path and backup state.
 
 ### Track F: Packaging, Signing, Updates, CI
 

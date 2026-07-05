@@ -220,9 +220,34 @@ nav {
   gap: 2px;
 }
 
+.surface-row .row-actions {
+  flex: 0 0 auto;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
 .surface-row strong,
 .surface-row span {
   overflow-wrap: anywhere;
+}
+
+.icon-action {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dbe2e6;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #33404c;
+  cursor: pointer;
+}
+
+.icon-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .status {

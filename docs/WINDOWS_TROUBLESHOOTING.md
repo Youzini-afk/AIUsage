@@ -138,7 +138,9 @@ AIUsage uses sidecar backups with `.aiusage.bak`.
 Check:
 
 - The UI shows the target config path before activation/restore.
+- The Config takeover panel shows `Managed`, `Detected`, `Missing`, or `Warning` for each native target.
 - The backup path exists after activation when the original file existed.
+- Restore is enabled only when AIUsage detects managed content or a sidecar backup.
 - Restore writes the original file bytes back or removes a managed-only file.
 - Native Windows and WSL targets are treated as separate choices.
 

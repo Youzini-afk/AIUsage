@@ -15,6 +15,7 @@ import {
   MonitorCog,
   Network,
   RefreshCw,
+  RotateCcw,
   Settings,
   ServerCog,
   ShieldCheck,
@@ -95,6 +96,22 @@ type PlatformEnvironmentSnapshot = {
   wslDistributions: WslDistributionSummary[];
   wslError: string | null;
   defaultProxyPorts: ProxyPortPreflight[];
+};
+
+type ManagedConfigKind = "claude" | "codex" | "openCode";
+
+type ManagedConfigTargetKind = "nativeWindows" | "customPath";
+
+type ManagedConfigStatus = {
+  kind: ManagedConfigKind;
+  targetKind: ManagedConfigTargetKind;
+  configPath: string;
+  backupPath: string;
+  configExists: boolean;
+  backupExists: boolean;
+  managed: boolean;
+  usesJsonc: boolean;
+  parseError: string | null;
 };
 
 type ProxyRuntimeState = "stopped" | "starting" | "running" | "stopping" | "failed";
@@ -385,6 +402,63 @@ function callKindLabel(kind: CallAnalyticsKind): string {
   }
 }
 
+function managedConfigKindLabel(kind: ManagedConfigKind): string {
+  switch (kind) {
+    case "claude":
+      return "Claude Code";
+    case "openCode":
+      return "OpenCode";
+    default:
+      return "Codex";
+  }
+}
+
+function managedConfigTargetLabel(targetKind: ManagedConfigTargetKind): string {
+  switch (targetKind) {
+    case "customPath":
+      return "Custom";
+    default:
+      return "Native";
+  }
+}
+
+function managedConfigStatusLabel(status: ManagedConfigStatus): string {
+  if (status.parseError) {
+    return "Warning";
+  }
+  if (status.managed) {
+    return "Managed";
+  }
+  if (status.configExists) {
+    return "Detected";
+  }
+  return "Missing";
+}
+
+function managedConfigStatusClass(status: ManagedConfigStatus): string {
+  if (status.parseError) {
+    return "blocked";
+  }
+  if (status.managed) {
+    return "complete";
+  }
+  if (status.configExists) {
+    return "inProgress";
+  }
+  return "planned";
+}
+
+function managedConfigRestoreCommand(kind: ManagedConfigKind): string {
+  switch (kind) {
+    case "claude":
+      return "restore_claude_managed_config";
+    case "openCode":
+      return "restore_opencode_managed_config";
+    default:
+      return "restore_codex_managed_config";
+  }
+}
+
 function updaterStateLabel(state: UpdaterState): string {
   switch (state) {
     case "checking":
@@ -453,6 +527,9 @@ export function App() {
   const [proxyUsageStats, setProxyUsageStats] = useState<ProxyUsageStats | null>(null);
   const [callInventory, setCallInventory] = useState<CallAnalyticsInventorySnapshot | null>(null);
   const [callSnapshot, setCallSnapshot] = useState<CallAnalyticsSnapshot | null>(null);
+  const [managedConfigStatuses, setManagedConfigStatuses] = useState<ManagedConfigStatus[]>([]);
+  const [managedConfigError, setManagedConfigError] = useState<string | null>(null);
+  const [managedConfigBusy, setManagedConfigBusy] = useState<ManagedConfigKind | null>(null);
   const [appSettings, setAppSettings] = useState<AppSettingsSnapshot | null>(null);
   const [diagnosticsExport, setDiagnosticsExport] = useState<DiagnosticsExportSnapshot | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
@@ -490,6 +567,9 @@ export function App() {
     invoke<CallAnalyticsSnapshot>("call_analytics_snapshot")
       .then(setCallSnapshot)
       .catch(() => setCallSnapshot(null));
+    invoke<ManagedConfigStatus[]>("config_statuses")
+      .then(setManagedConfigStatuses)
+      .catch((error) => setManagedConfigError(formatTauriRuntimeError(error, "Config takeover")));
     invoke<AppSettingsSnapshot>("app_settings")
       .then(setAppSettings)
       .catch(() => setAppSettings(null));
@@ -635,6 +715,9 @@ export function App() {
   const localCaTrusted = Boolean(localCertificateAuthority?.trustedCurrentUserRoot);
   const localCaStateLabel = localCaTrusted ? "Trusted" : localCaPrepared ? "Prepared" : "Not ready";
   const localCaStatusClass = localCaTrusted ? "complete" : localCaPrepared ? "inProgress" : "planned";
+  const managedConfigManagedCount = managedConfigStatuses.filter((status) => status.managed).length;
+  const managedConfigBackupCount = managedConfigStatuses.filter((status) => status.backupExists).length;
+  const managedConfigWarningCount = managedConfigStatuses.filter((status) => status.parseError).length;
   const updaterBusy = updaterState === "checking" || updaterState === "downloading" || updaterState === "installing";
   const updaterProgressPercent =
     updaterProgress?.contentLength && updaterProgress.contentLength > 0
@@ -676,6 +759,22 @@ export function App() {
       .then(setLocalCertificateAuthority)
       .catch((error) => setLocalCertificateAuthorityError(formatTauriRuntimeError(error, "Local CA")))
       .finally(() => setLocalCertificateAuthorityBusy(false));
+  }
+
+  function runManagedConfigRestore(status: ManagedConfigStatus) {
+    const command = managedConfigRestoreCommand(status.kind);
+    setManagedConfigBusy(status.kind);
+    setManagedConfigError(null);
+    invoke<ManagedConfigStatus>(command, {
+      configPath: status.targetKind === "customPath" ? status.configPath : null
+    })
+      .then((updated) =>
+        setManagedConfigStatuses((previous) =>
+          previous.map((row) => (row.kind === updated.kind ? updated : row))
+        )
+      )
+      .catch((error) => setManagedConfigError(formatTauriRuntimeError(error, "Config takeover")))
+      .finally(() => setManagedConfigBusy(null));
   }
 
   async function checkForUpdates() {
@@ -1025,6 +1124,100 @@ export function App() {
             <div className="settings-error">{platformEnvironment.browserProfileError}</div>
           ) : null}
           {platformEnvironment?.wslError ? <div className="settings-error">{platformEnvironment.wslError}</div> : null}
+        </section>
+
+        <section className="panel compact-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Target safety</p>
+              <h3>Config takeover</h3>
+            </div>
+            <Braces size={18} />
+          </div>
+          <div className="usage-grid">
+            <section className="usage-meter">
+              <span>Managed</span>
+              <strong>
+                {managedConfigManagedCount}/{managedConfigStatuses.length || 3}
+              </strong>
+            </section>
+            <section className="usage-meter">
+              <span>Backups</span>
+              <strong>{managedConfigBackupCount}</strong>
+            </section>
+            <section className="usage-meter">
+              <span>Warnings</span>
+              <strong>{managedConfigWarningCount}</strong>
+            </section>
+          </div>
+          <div className="surface-list single-column">
+            {(managedConfigStatuses.length
+              ? managedConfigStatuses
+              : [
+                  {
+                    kind: "codex",
+                    targetKind: "nativeWindows",
+                    configPath: "%USERPROFILE%\\.codex\\config.toml",
+                    backupPath: "%USERPROFILE%\\.codex\\config.toml.aiusage.bak",
+                    configExists: false,
+                    backupExists: false,
+                    managed: false,
+                    usesJsonc: false,
+                    parseError: null
+                  },
+                  {
+                    kind: "claude",
+                    targetKind: "nativeWindows",
+                    configPath: "%USERPROFILE%\\.claude\\settings.json",
+                    backupPath: "%USERPROFILE%\\.claude\\settings.json.aiusage.bak",
+                    configExists: false,
+                    backupExists: false,
+                    managed: false,
+                    usesJsonc: false,
+                    parseError: null
+                  },
+                  {
+                    kind: "openCode",
+                    targetKind: "nativeWindows",
+                    configPath: "%USERPROFILE%\\.config\\opencode\\opencode.json",
+                    backupPath: "%USERPROFILE%\\.config\\opencode\\opencode.json.aiusage.bak",
+                    configExists: false,
+                    backupExists: false,
+                    managed: false,
+                    usesJsonc: false,
+                    parseError: null
+                  }
+                ] satisfies ManagedConfigStatus[]
+            ).map((status) => (
+              <article key={`${status.kind}-${status.targetKind}-${status.configPath}`} className="surface-row config-row">
+                <div>
+                  <strong>
+                    {managedConfigKindLabel(status.kind)} · {managedConfigTargetLabel(status.targetKind)}
+                  </strong>
+                  <span>{status.configPath}</span>
+                  <span>
+                    {status.backupExists ? `Backup ${status.backupPath}` : "No backup"}
+                    {status.usesJsonc ? " · JSONC" : ""}
+                  </span>
+                  {status.parseError ? <span>{status.parseError}</span> : null}
+                </div>
+                <div className="row-actions">
+                  <span className={`status ${managedConfigStatusClass(status)}`}>{managedConfigStatusLabel(status)}</span>
+                  <button
+                    className="icon-action"
+                    type="button"
+                    title={`Restore ${managedConfigKindLabel(status.kind)}`}
+                    aria-label={`Restore ${managedConfigKindLabel(status.kind)}`}
+                    disabled={managedConfigBusy === status.kind || (!status.managed && !status.backupExists)}
+                    onClick={() => runManagedConfigRestore(status)}
+                  >
+                    <RotateCcw size={15} />
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+          {managedConfigError ? <div className="settings-error">{managedConfigError}</div> : null}
         </section>
 
         <section className="panel">
