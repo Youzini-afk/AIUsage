@@ -69,6 +69,8 @@ https://github.com/<owner>/<repo>/releases/latest/download/latest.json
 
 On tag builds, if `WINDOWS_UPDATE_BASE_URL` is not set, `latest.json` points at that tag's GitHub Release assets. The updater manifest uses the `windows-x86_64` platform key and the NSIS setup asset as the install URL.
 
+The base `Windows/src-tauri/tauri.conf.json` keeps an inert updater config with an empty endpoint list so unsigned local bundles still launch. When updater secrets are present, the release workflow overwrites that object with the real public key, endpoint, and passive Windows install mode.
+
 ## Release Artifacts
 
 For version `x.y.z`, the workflow emits:

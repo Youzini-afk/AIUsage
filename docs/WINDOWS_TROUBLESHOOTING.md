@@ -24,6 +24,14 @@ Check:
 - Windows Defender or enterprise policy did not quarantine the binary.
 - Reinstall with the latest NSIS setup, then retry from Start Menu.
 
+If double-clicking only flashes a console window, run the packaged binary from PowerShell so the startup error stays visible:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\AIUsage\AIUsage.exe"
+```
+
+An error mentioning `PluginInitialization("updater")` means the build was produced with an invalid `plugins.updater` Tauri config. The base Windows config must keep an updater object with at least `pubkey`, `endpoints`, and Windows install mode defaults, even when release automation has not injected a real updater endpoint yet.
+
 If launch still fails, collect the diagnostics export if possible and capture Windows Event Viewer application errors for `AIUsage`.
 
 ## Tray Or Background Mode
