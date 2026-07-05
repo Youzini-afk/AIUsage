@@ -7,8 +7,12 @@ use thiserror::Error;
 pub enum PlatformError {
     #[error("required path is unavailable: {0}")]
     MissingPath(&'static str),
+    #[error("Windows API call failed: {operation} ({code})")]
+    WindowsApi { operation: &'static str, code: i32 },
     #[error("operation is not implemented for this platform phase: {0}")]
     NotImplemented(&'static str),
+    #[error("platform data was invalid: {0}")]
+    InvalidData(&'static str),
     #[error("platform IO failed: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -54,7 +58,13 @@ pub trait AppPaths {
 pub trait CredentialVault {
     fn load_vault(&self) -> PlatformResult<Option<Vec<u8>>>;
     fn save_vault(&self, data: &[u8]) -> PlatformResult<()>;
+    fn delete_vault(&self) -> PlatformResult<()>;
     fn supported_kinds(&self) -> Vec<CredentialKind>;
+}
+
+pub trait ProtectedData {
+    fn protect(&self, data: &[u8]) -> PlatformResult<Vec<u8>>;
+    fn unprotect(&self, data: &[u8]) -> PlatformResult<Vec<u8>>;
 }
 
 pub trait BrowserSessionDiscovery {

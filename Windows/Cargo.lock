@@ -67,6 +67,7 @@ version = "0.1.0"
 dependencies = [
  "aiusage-core",
  "aiusage-platform",
+ "windows",
 ]
 
 [[package]]
