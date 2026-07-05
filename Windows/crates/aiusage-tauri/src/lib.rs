@@ -1,16 +1,17 @@
 use aiusage_core::phase_a_snapshot;
 use aiusage_platform::AppPaths;
 use aiusage_proxy::{ProxyError, ProxyRuntimeEvent, ProxySupervisor};
-use aiusage_services::{ManagedConfigService, ServiceError};
-use aiusage_windows::{WindowsAppPaths, WindowsFilePermissionGuard};
+use aiusage_services::{CredentialRegistry, ManagedConfigService, ServiceError};
+use aiusage_windows::{WindowsAppPaths, WindowsCredentialVault, WindowsFilePermissionGuard};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
 pub use aiusage_core::{DesktopSnapshot, ProxyTrack};
 pub use aiusage_proxy::{ProxyHealth, ProxyProtocol, ProxyRuntimeConfig, ProxyRuntimeState};
 pub use aiusage_services::{
-    ClaudeActivationRequest, CodexActivationRequest, ManagedConfigKind, ManagedConfigStatus,
-    ManagedConfigTargetKind, OpenCodeActivationRequest, ProxyUsageArchiveSummary,
+    ClaudeActivationRequest, CodexActivationRequest, CredentialSummary, ManagedConfigKind,
+    ManagedConfigStatus, ManagedConfigTargetKind, OpenCodeActivationRequest,
+    ProxyUsageArchiveSummary, UpsertCredentialRequest,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -66,6 +67,20 @@ pub async fn stop_proxy_runtime(track: ProxyTrack) -> Result<ProxyHealth, ProxyE
 
 pub fn proxy_usage_archive_summaries() -> Result<Vec<ProxyUsageArchiveSummary>, ServiceError> {
     proxy_usage_archive_store().summaries()
+}
+
+pub fn credential_summaries() -> Result<Vec<CredentialSummary>, ServiceError> {
+    credential_registry().list_summaries()
+}
+
+pub fn save_credential(
+    request: UpsertCredentialRequest,
+) -> Result<CredentialSummary, ServiceError> {
+    credential_registry().upsert(request)
+}
+
+pub fn delete_credential(id: String) -> Result<bool, ServiceError> {
+    credential_registry().delete(&id)
 }
 
 pub fn managed_config_statuses() -> Result<Vec<ManagedConfigStatus>, ServiceError> {
@@ -145,6 +160,10 @@ fn proxy_usage_archive_store(
         WindowsAppPaths::new(),
         WindowsFilePermissionGuard,
     )
+}
+
+fn credential_registry() -> CredentialRegistry<WindowsCredentialVault> {
+    CredentialRegistry::new(WindowsCredentialVault::default())
 }
 
 fn display_path(path: std::path::PathBuf) -> String {

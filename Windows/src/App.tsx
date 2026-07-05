@@ -48,6 +48,16 @@ type ProxyUsageArchiveSummary = {
   updatedAtEpochMs: number | null;
 };
 
+type CredentialSummary = {
+  id: string;
+  providerId: string;
+  label: string;
+  kind: string;
+  hasSecret: boolean;
+  metadata: unknown;
+  updatedAtEpochMs: number;
+};
+
 const fallbackSnapshot: DesktopSnapshot = {
   appName: "AIUsage",
   phase: "Windows Phase A",
@@ -133,6 +143,7 @@ export function App() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>(fallbackSnapshot);
   const [proxyHealth, setProxyHealth] = useState<ProxyHealth[]>([]);
   const [proxyArchives, setProxyArchives] = useState<ProxyUsageArchiveSummary[]>([]);
+  const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [activeSection, setActiveSection] = useState("dashboard");
 
   useEffect(() => {
@@ -145,6 +156,9 @@ export function App() {
     invoke<ProxyUsageArchiveSummary[]>("proxy_usage_archives")
       .then(setProxyArchives)
       .catch(() => setProxyArchives([]));
+    invoke<CredentialSummary[]>("credentials")
+      .then(setCredentials)
+      .catch(() => setCredentials([]));
   }, []);
 
   const activeSurface = useMemo(
@@ -225,6 +239,10 @@ export function App() {
           <section className="stat-tile">
             <span>Usage archive rows</span>
             <strong>{archivedUsageRows}</strong>
+          </section>
+          <section className="stat-tile">
+            <span>Stored credentials</span>
+            <strong>{credentials.length}</strong>
           </section>
         </div>
 

@@ -8,9 +8,11 @@ use aiusage_core::{
     claude_has_managed_entries, inject_claude_managed_settings, inject_codex_managed_config,
     inject_opencode_managed_config_with_base, opencode_has_managed_entries, parse_json_or_jsonc,
     strip_claude_managed_settings, strip_codex_managed_blocks, strip_opencode_managed_entries,
-    ClaudeManagedSettings, CodexManagedConfig, OpenCodeManagedNode,
+    ClaudeManagedSettings, CodexManagedConfig, CredentialKind, OpenCodeManagedNode,
 };
-use aiusage_platform::{AppPaths, FilePermissionGuard, PlatformError, PlatformResult};
+use aiusage_platform::{
+    AppPaths, CredentialVault, FilePermissionGuard, PlatformError, PlatformResult,
+};
 use aiusage_proxy::ProxyUsage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -119,6 +121,163 @@ pub struct ProxyUsageArchiveSummary {
     pub path: String,
     pub records: usize,
     pub updated_at_epoch_ms: Option<u128>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialVaultDocument {
+    pub version: u32,
+    pub credentials: Vec<StoredCredential>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredCredential {
+    pub id: String,
+    pub provider_id: String,
+    pub label: String,
+    pub kind: CredentialKind,
+    pub secret: String,
+    pub metadata: Value,
+    pub created_at_epoch_ms: u128,
+    pub updated_at_epoch_ms: u128,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialSummary {
+    pub id: String,
+    pub provider_id: String,
+    pub label: String,
+    pub kind: CredentialKind,
+    pub has_secret: bool,
+    pub metadata: Value,
+    pub updated_at_epoch_ms: u128,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpsertCredentialRequest {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub provider_id: String,
+    pub label: String,
+    pub kind: CredentialKind,
+    pub secret: String,
+    #[serde(default)]
+    pub metadata: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct CredentialRegistry<V> {
+    vault: V,
+}
+
+impl<V> CredentialRegistry<V>
+where
+    V: CredentialVault,
+{
+    pub fn new(vault: V) -> Self {
+        Self { vault }
+    }
+
+    pub fn list_summaries(&self) -> ServiceResult<Vec<CredentialSummary>> {
+        Ok(self
+            .load_document()?
+            .credentials
+            .into_iter()
+            .map(|credential| CredentialSummary {
+                id: credential.id,
+                provider_id: credential.provider_id,
+                label: credential.label,
+                kind: credential.kind,
+                has_secret: !credential.secret.is_empty(),
+                metadata: credential.metadata,
+                updated_at_epoch_ms: credential.updated_at_epoch_ms,
+            })
+            .collect())
+    }
+
+    pub fn upsert(&self, request: UpsertCredentialRequest) -> ServiceResult<CredentialSummary> {
+        validate_credential_request(&request)?;
+        let mut document = self.load_document()?;
+        let now = epoch_ms();
+        let id = request.id.unwrap_or_else(|| format!("cred-{now}"));
+
+        let mut created_at = now;
+        document.credentials.retain(|credential| {
+            if credential.id == id {
+                created_at = credential.created_at_epoch_ms;
+                false
+            } else {
+                true
+            }
+        });
+
+        let credential = StoredCredential {
+            id: id.clone(),
+            provider_id: request.provider_id.trim().to_string(),
+            label: request.label.trim().to_string(),
+            kind: request.kind,
+            secret: request.secret,
+            metadata: request.metadata,
+            created_at_epoch_ms: created_at,
+            updated_at_epoch_ms: now,
+        };
+        let summary = CredentialSummary {
+            id,
+            provider_id: credential.provider_id.clone(),
+            label: credential.label.clone(),
+            kind: credential.kind.clone(),
+            has_secret: !credential.secret.is_empty(),
+            metadata: credential.metadata.clone(),
+            updated_at_epoch_ms: credential.updated_at_epoch_ms,
+        };
+        document.credentials.push(credential);
+        self.save_document(&document)?;
+        Ok(summary)
+    }
+
+    pub fn delete(&self, id: &str) -> ServiceResult<bool> {
+        let mut document = self.load_document()?;
+        let before = document.credentials.len();
+        document
+            .credentials
+            .retain(|credential| credential.id != id);
+        let removed = before != document.credentials.len();
+        if removed {
+            if document.credentials.is_empty() {
+                self.vault.delete_vault()?;
+            } else {
+                self.save_document(&document)?;
+            }
+        }
+        Ok(removed)
+    }
+
+    pub fn reveal(&self, id: &str) -> ServiceResult<Option<StoredCredential>> {
+        Ok(self
+            .load_document()?
+            .credentials
+            .into_iter()
+            .find(|credential| credential.id == id))
+    }
+
+    fn load_document(&self) -> ServiceResult<CredentialVaultDocument> {
+        let Some(data) = self.vault.load_vault()? else {
+            return Ok(CredentialVaultDocument {
+                version: 1,
+                credentials: Vec::new(),
+            });
+        };
+        Ok(serde_json::from_slice(&data)?)
+    }
+
+    fn save_document(&self, document: &CredentialVaultDocument) -> ServiceResult<()> {
+        self.vault
+            .save_vault(&serde_json::to_vec_pretty(document)?)?;
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -653,6 +812,23 @@ fn validate_opencode_node(node: &OpenCodeManagedNode) -> ServiceResult<()> {
     Ok(())
 }
 
+fn validate_credential_request(request: &UpsertCredentialRequest) -> ServiceResult<()> {
+    if request.provider_id.trim().is_empty() {
+        return Err(ServiceError::InvalidRequest(
+            "credential provider_id is required",
+        ));
+    }
+    if request.label.trim().is_empty() {
+        return Err(ServiceError::InvalidRequest("credential label is required"));
+    }
+    if request.secret.is_empty() {
+        return Err(ServiceError::InvalidRequest(
+            "credential secret is required",
+        ));
+    }
+    Ok(())
+}
+
 fn parse_json_object(text: &str, error: &'static str) -> ServiceResult<Value> {
     let value: Value = serde_json::from_str(text)?;
     if value.is_object() {
@@ -735,13 +911,21 @@ fn archive_track_slug(track: &aiusage_core::ProxyTrack) -> &'static str {
     }
 }
 
+fn epoch_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use aiusage_core::OpenCodeManagedModel;
-    use aiusage_platform::PlatformResult;
+    use aiusage_platform::{CredentialVault, PlatformResult};
     use aiusage_proxy::{ProxyProtocol, ProxyUsage};
     use serde_json::json;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
     #[derive(Clone, Debug)]
@@ -778,6 +962,31 @@ mod tests {
 
         fn opencode_config_dir(&self) -> PlatformResult<PathBuf> {
             Ok(self.root.join(".config").join("opencode"))
+        }
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct MemoryVault {
+        data: Arc<Mutex<Option<Vec<u8>>>>,
+    }
+
+    impl CredentialVault for MemoryVault {
+        fn load_vault(&self) -> PlatformResult<Option<Vec<u8>>> {
+            Ok(self.data.lock().expect("vault lock").clone())
+        }
+
+        fn save_vault(&self, data: &[u8]) -> PlatformResult<()> {
+            *self.data.lock().expect("vault lock") = Some(data.to_vec());
+            Ok(())
+        }
+
+        fn delete_vault(&self) -> PlatformResult<()> {
+            *self.data.lock().expect("vault lock") = None;
+            Ok(())
+        }
+
+        fn supported_kinds(&self) -> Vec<CredentialKind> {
+            vec![CredentialKind::ApiKey, CredentialKind::Token]
         }
     }
 
@@ -910,6 +1119,36 @@ mod tests {
             .expect("codex summary");
         assert_eq!(summary.records, 1);
         assert!(summary.path.ends_with("proxy-usage-codex-v1.json"));
+    }
+
+    #[test]
+    fn credential_registry_stores_summaries_without_exposing_secret() {
+        let registry = CredentialRegistry::new(MemoryVault::default());
+        let summary = registry
+            .upsert(UpsertCredentialRequest {
+                id: Some("cred-1".into()),
+                provider_id: "codex".into(),
+                label: "Codex Auth".into(),
+                kind: CredentialKind::Token,
+                secret: "secret-token".into(),
+                metadata: json!({"sourcePath": "~/.codex/auth.json"}),
+            })
+            .expect("upsert credential");
+        assert_eq!(summary.id, "cred-1");
+        assert!(summary.has_secret);
+
+        let summaries = registry.list_summaries().expect("summaries");
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].metadata["sourcePath"], "~/.codex/auth.json");
+
+        let revealed = registry
+            .reveal("cred-1")
+            .expect("reveal")
+            .expect("credential exists");
+        assert_eq!(revealed.secret, "secret-token");
+
+        assert!(registry.delete("cred-1").expect("delete"));
+        assert!(registry.list_summaries().expect("empty").is_empty());
     }
 
     #[test]

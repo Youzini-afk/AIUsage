@@ -1,9 +1,10 @@
 use aiusage_tauri::{
     activate_claude_config, activate_codex_config, activate_opencode_config,
-    build_phase_a_snapshot, managed_config_statuses, restore_claude_config, restore_codex_config,
-    restore_opencode_config, start_proxy_runtime, stop_proxy_runtime, ClaudeActivationRequest,
-    CodexActivationRequest, DesktopSnapshot, ManagedConfigStatus, OpenCodeActivationRequest,
-    ProxyHealth, ProxyRuntimeConfig, ProxyTrack, ProxyUsageArchiveSummary,
+    build_phase_a_snapshot, credential_summaries, delete_credential, managed_config_statuses,
+    restore_claude_config, restore_codex_config, restore_opencode_config, save_credential,
+    start_proxy_runtime, stop_proxy_runtime, ClaudeActivationRequest, CodexActivationRequest,
+    CredentialSummary, DesktopSnapshot, ManagedConfigStatus, OpenCodeActivationRequest,
+    ProxyHealth, ProxyRuntimeConfig, ProxyTrack, ProxyUsageArchiveSummary, UpsertCredentialRequest,
 };
 
 #[tauri::command]
@@ -24,6 +25,21 @@ async fn proxy_statuses() -> Result<Vec<ProxyHealth>, String> {
 #[tauri::command]
 fn proxy_usage_archives() -> Result<Vec<ProxyUsageArchiveSummary>, String> {
     aiusage_tauri::proxy_usage_archive_summaries().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn credentials() -> Result<Vec<CredentialSummary>, String> {
+    credential_summaries().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_provider_credential(request: UpsertCredentialRequest) -> Result<CredentialSummary, String> {
+    save_credential(request).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn delete_provider_credential(id: String) -> Result<bool, String> {
+    delete_credential(id).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -87,6 +103,9 @@ pub fn run() {
             config_statuses,
             proxy_statuses,
             proxy_usage_archives,
+            credentials,
+            save_provider_credential,
+            delete_provider_credential,
             start_proxy,
             stop_proxy,
             apply_claude_config,
