@@ -81,6 +81,7 @@ Deliverables:
 - Local proxy request accounting.
 - Per-node log ingestion and archive writes.
 - Proxy supervisor with start/stop/restart/connectivity test APIs.
+- Windows port preflight before proxy bind, with owning process details surfaced where available.
 - TLS local proxy support.
 
 Completion criteria:
@@ -110,7 +111,7 @@ Completion criteria:
 - UI routes map to all macOS product surfaces.
 - Major workflows are covered by automated E2E tests and manual QA checklist.
 - Long-running refresh/proxy operations stream progress and errors to the UI.
-- Platform environment status is visible for Windows path/proxy/browser-profile troubleshooting.
+- Platform environment status is visible for Windows path/proxy/browser-profile/default-port troubleshooting.
 
 ### Track F: Packaging, Signing, Updates, CI
 

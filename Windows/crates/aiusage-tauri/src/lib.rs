@@ -1,5 +1,7 @@
 use aiusage_core::phase_a_snapshot;
-use aiusage_platform::{AppPaths, BrowserSessionDiscovery, SystemProxyReader};
+use aiusage_platform::{
+    AppPaths, BrowserSessionDiscovery, PortInspector, PortOwner, SystemProxyReader,
+};
 use aiusage_proxy::{ProxyError, ProxyRuntimeEvent, ProxySupervisor};
 use aiusage_services::{
     AppSettingsService, CallAnalyticsInventoryService, CallAnalyticsService, CredentialRegistry,
@@ -7,7 +9,7 @@ use aiusage_services::{
 };
 use aiusage_windows::{
     WindowsAppPaths, WindowsAutostartManager, WindowsBrowserDiscovery, WindowsCredentialVault,
-    WindowsFilePermissionGuard, WindowsSystemProxyReader,
+    WindowsFilePermissionGuard, WindowsPortInspector, WindowsSystemProxyReader,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -60,12 +62,32 @@ pub struct BrowserProfileSummary {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProxyPortOwnerSummary {
+    pub port: u16,
+    pub process_id: u32,
+    pub image_path: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyPortPreflight {
+    pub track: ProxyTrack,
+    pub bind_host: String,
+    pub port: u16,
+    pub available: bool,
+    pub owner: Option<ProxyPortOwnerSummary>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlatformEnvironmentSnapshot {
     pub generated_at_epoch_ms: u128,
     pub paths: DesktopPathSnapshot,
     pub system_proxy: SystemProxySummary,
     pub browser_profiles: Vec<BrowserProfileSummary>,
     pub browser_profile_error: Option<String>,
+    pub default_proxy_ports: Vec<ProxyPortPreflight>,
 }
 
 pub fn build_phase_a_snapshot() -> DesktopSnapshot {
@@ -122,6 +144,7 @@ pub fn platform_environment() -> PlatformEnvironmentSnapshot {
         system_proxy,
         browser_profiles,
         browser_profile_error,
+        default_proxy_ports: default_proxy_port_preflights(),
     }
 }
 
@@ -130,9 +153,23 @@ pub async fn proxy_statuses() -> Vec<ProxyHealth> {
     proxy_supervisor().all_health().await
 }
 
-pub async fn start_proxy_runtime(config: ProxyRuntimeConfig) -> Result<ProxyHealth, ProxyError> {
+pub async fn start_proxy_runtime(config: ProxyRuntimeConfig) -> Result<ProxyHealth, String> {
     ensure_proxy_usage_archiver();
-    proxy_supervisor().start(config).await
+    proxy_supervisor()
+        .stop(config.track.clone())
+        .await
+        .map_err(|error| error.to_string())?;
+
+    let preflight =
+        proxy_port_preflight(config.track.clone(), config.bind_host.clone(), config.port);
+    if let Some(owner) = &preflight.owner {
+        return Err(proxy_port_conflict_message(&preflight, owner));
+    }
+
+    proxy_supervisor()
+        .start(config)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 pub async fn stop_proxy_runtime(track: ProxyTrack) -> Result<ProxyHealth, ProxyError> {
@@ -169,6 +206,11 @@ pub fn save_app_settings(
 pub fn export_diagnostics() -> Result<DiagnosticsExportSnapshot, ServiceError> {
     DiagnosticsExportService::with_permissions(WindowsAppPaths::new(), WindowsFilePermissionGuard)
         .export()
+}
+
+pub fn proxy_port_preflight(track: ProxyTrack, bind_host: String, port: u16) -> ProxyPortPreflight {
+    let inspector = WindowsPortInspector;
+    proxy_port_preflight_with_inspector(&inspector, track, bind_host, port)
 }
 
 pub fn credential_summaries() -> Result<Vec<CredentialSummary>, ServiceError> {
@@ -272,6 +314,84 @@ fn app_settings_service() -> AppSettingsService<WindowsAppPaths, WindowsAutostar
     AppSettingsService::with_autostart(WindowsAppPaths::new(), WindowsAutostartManager::default())
 }
 
+fn default_proxy_port_preflights() -> Vec<ProxyPortPreflight> {
+    [
+        (ProxyTrack::Codex, 14_399),
+        (ProxyTrack::ClaudeCode, 14_400),
+        (ProxyTrack::OpenCode, 14_401),
+        (ProxyTrack::Global, 14_402),
+    ]
+    .into_iter()
+    .map(|(track, port)| proxy_port_preflight(track, "127.0.0.1".to_string(), port))
+    .collect()
+}
+
+fn proxy_port_preflight_with_inspector<I>(
+    inspector: &I,
+    track: ProxyTrack,
+    bind_host: String,
+    port: u16,
+) -> ProxyPortPreflight
+where
+    I: PortInspector,
+{
+    if port == 0 {
+        return ProxyPortPreflight {
+            track,
+            bind_host,
+            port,
+            available: true,
+            owner: None,
+            error_message: None,
+        };
+    }
+
+    match inspector.owner_for_port(port) {
+        Ok(owner) => {
+            let owner = owner.map(port_owner_summary);
+            ProxyPortPreflight {
+                track,
+                bind_host,
+                port,
+                available: owner.is_none(),
+                owner,
+                error_message: None,
+            }
+        }
+        Err(error) => ProxyPortPreflight {
+            track,
+            bind_host,
+            port,
+            available: false,
+            owner: None,
+            error_message: Some(error.to_string()),
+        },
+    }
+}
+
+fn port_owner_summary(owner: PortOwner) -> ProxyPortOwnerSummary {
+    ProxyPortOwnerSummary {
+        port: owner.port,
+        process_id: owner.process_id,
+        image_path: owner.image_path.map(|path| path.display().to_string()),
+    }
+}
+
+fn proxy_port_conflict_message(
+    preflight: &ProxyPortPreflight,
+    owner: &ProxyPortOwnerSummary,
+) -> String {
+    let image = owner
+        .image_path
+        .as_deref()
+        .map(|path| format!(" ({path})"))
+        .unwrap_or_default();
+    format!(
+        "{}:{} is already in use by process {}{}",
+        preflight.bind_host, preflight.port, owner.process_id, image
+    )
+}
+
 fn desktop_path_snapshot(paths: &WindowsAppPaths) -> DesktopPathSnapshot {
     DesktopPathSnapshot {
         app_config_dir: paths.app_config_dir().ok().map(display_path),
@@ -296,6 +416,8 @@ fn epoch_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aiusage_platform::{PlatformError, PlatformResult};
+    use std::path::PathBuf;
 
     #[test]
     fn tauri_snapshot_contains_release_targets() {
@@ -312,6 +434,53 @@ mod tests {
         let snapshot = platform_environment();
         assert!(snapshot.paths.app_config_dir.is_some());
         let _ = snapshot.system_proxy.any_enabled;
+        assert_eq!(snapshot.default_proxy_ports.len(), 4);
+    }
+
+    #[test]
+    fn proxy_port_preflight_reports_owner() {
+        #[derive(Clone, Debug)]
+        struct FakePortInspector;
+
+        impl PortInspector for FakePortInspector {
+            fn owner_for_port(&self, port: u16) -> PlatformResult<Option<PortOwner>> {
+                Ok(Some(PortOwner {
+                    port,
+                    process_id: 42,
+                    image_path: Some(PathBuf::from("C:\\Tools\\server.exe")),
+                }))
+            }
+        }
+
+        let preflight = proxy_port_preflight_with_inspector(
+            &FakePortInspector,
+            ProxyTrack::Codex,
+            "127.0.0.1".into(),
+            14_399,
+        );
+        assert!(!preflight.available);
+        assert_eq!(preflight.owner.expect("owner").process_id, 42);
+    }
+
+    #[test]
+    fn proxy_port_preflight_keeps_inspection_errors_non_fatal() {
+        #[derive(Clone, Debug)]
+        struct FailingPortInspector;
+
+        impl PortInspector for FailingPortInspector {
+            fn owner_for_port(&self, _port: u16) -> PlatformResult<Option<PortOwner>> {
+                Err(PlatformError::NotImplemented("test"))
+            }
+        }
+
+        let preflight = proxy_port_preflight_with_inspector(
+            &FailingPortInspector,
+            ProxyTrack::Codex,
+            "127.0.0.1".into(),
+            14_399,
+        );
+        assert!(preflight.error_message.is_some());
+        assert!(preflight.owner.is_none());
     }
 
     #[test]

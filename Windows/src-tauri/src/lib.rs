@@ -10,7 +10,7 @@ use aiusage_tauri::{
     AppSettingsSnapshot, CallAnalyticsInventorySnapshot, CallAnalyticsSnapshot,
     ClaudeActivationRequest, CodexActivationRequest, CredentialSummary, DesktopSnapshot,
     DiagnosticsExportSnapshot, ManagedConfigStatus, OpenCodeActivationRequest,
-    PlatformEnvironmentSnapshot, ProxyHealth, ProxyRuntimeConfig, ProxyTrack,
+    PlatformEnvironmentSnapshot, ProxyHealth, ProxyPortPreflight, ProxyRuntimeConfig, ProxyTrack,
     ProxyUsageArchiveSummary, ProxyUsageStats, UpsertCredentialRequest,
 };
 use tauri::{
@@ -82,6 +82,11 @@ fn save_app_settings(settings: AppSettingsDocument) -> Result<AppSettingsSnapsho
 #[tauri::command]
 fn export_diagnostics() -> Result<DiagnosticsExportSnapshot, String> {
     export_windows_diagnostics().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn proxy_port_preflight(track: ProxyTrack, bind_host: String, port: u16) -> ProxyPortPreflight {
+    aiusage_tauri::proxy_port_preflight(track, bind_host, port)
 }
 
 #[tauri::command]
@@ -263,6 +268,7 @@ pub fn run() {
             app_settings,
             save_app_settings,
             export_diagnostics,
+            proxy_port_preflight,
             credentials,
             save_provider_credential,
             delete_provider_credential,

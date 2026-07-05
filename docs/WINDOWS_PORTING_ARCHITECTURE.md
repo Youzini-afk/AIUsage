@@ -118,7 +118,7 @@ Windows implementations:
 - Certificates: user or local-machine certificate store installation flow with clear elevation behavior.
 - Autostart: current-user HKCU Run registry adapter is implemented; tray lifecycle remains in the Tauri desktop shell and consumes persisted app settings.
 
-The Tauri command layer exposes a non-secret platform environment snapshot built from these adapters: app/CLI paths, system proxy endpoints, and browser profile metadata. Browser rows identify candidate cookie databases for future provider login flows but do not decrypt or read cookie values.
+The Tauri command layer exposes a non-secret platform environment snapshot built from these adapters: app/CLI paths, system proxy endpoints, browser profile metadata, and default proxy port preflight. Browser rows identify candidate cookie databases for future provider login flows but do not decrypt or read cookie values.
 
 ## Desktop Shell
 
@@ -199,7 +199,7 @@ Preferred Windows design:
 - The proxy runtime is an in-process Rust service for normal Tauri operation.
 - A sidecar/CLI binary remains available for isolation, crash diagnostics, and future service/headless operation.
 - The app supervises all active proxy tracks through a common `ProxySupervisor`.
-- Port conflicts are reported with owning process details where possible.
+- Port conflicts are checked in the Windows Tauri layer after stopping the same track and before binding; owning process PID/path is reported where Windows exposes it.
 - Only AIUsage-owned proxy processes are stopped automatically.
 
 ## Update And Release Architecture

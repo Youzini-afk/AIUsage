@@ -27,6 +27,8 @@ type ProductSurface = {
   status: FeatureStatus;
 };
 
+type ProxyTrack = "claudeCode" | "codex" | "openCode" | "global";
+
 type DesktopSnapshot = {
   appName: string;
   phase: string;
@@ -57,18 +59,34 @@ type BrowserProfileSummary = {
   cookiesDbPath: string;
 };
 
+type ProxyPortOwnerSummary = {
+  port: number;
+  processId: number;
+  imagePath: string | null;
+};
+
+type ProxyPortPreflight = {
+  track: ProxyTrack;
+  bindHost: string;
+  port: number;
+  available: boolean;
+  owner: ProxyPortOwnerSummary | null;
+  errorMessage: string | null;
+};
+
 type PlatformEnvironmentSnapshot = {
   generatedAtEpochMs: number;
   paths: DesktopPathSnapshot;
   systemProxy: SystemProxySummary;
   browserProfiles: BrowserProfileSummary[];
   browserProfileError: string | null;
+  defaultProxyPorts: ProxyPortPreflight[];
 };
 
 type ProxyRuntimeState = "stopped" | "starting" | "running" | "stopping" | "failed";
 
 type ProxyHealth = {
-  track: "claudeCode" | "codex" | "openCode" | "global";
+  track: ProxyTrack;
   state: ProxyRuntimeState;
   listeningPort: number | null;
 };
@@ -489,6 +507,14 @@ export function App() {
   ];
   const systemProxy = platformEnvironment?.systemProxy;
   const browserProfiles = platformEnvironment?.browserProfiles ?? [];
+  const defaultProxyPorts =
+    platformEnvironment?.defaultProxyPorts ??
+    ([
+      { track: "codex", bindHost: "127.0.0.1", port: 14399, available: true, owner: null, errorMessage: null },
+      { track: "claudeCode", bindHost: "127.0.0.1", port: 14400, available: true, owner: null, errorMessage: null },
+      { track: "openCode", bindHost: "127.0.0.1", port: 14401, available: true, owner: null, errorMessage: null },
+      { track: "global", bindHost: "127.0.0.1", port: 14402, available: true, owner: null, errorMessage: null }
+    ] satisfies ProxyPortPreflight[]);
   const availablePlatformPaths = platformPathRows.filter((row) => !row.path.includes("%")).length;
 
   function saveSettingsPatch(patch: Partial<AppSettingsDocument>) {
@@ -665,6 +691,12 @@ export function App() {
               <span>Proxy endpoints</span>
               <strong>{[systemProxy?.http, systemProxy?.https, systemProxy?.socks].filter(Boolean).length}</strong>
             </section>
+            <section className="usage-meter">
+              <span>Free default ports</span>
+              <strong>
+                {defaultProxyPorts.filter((port) => port.available).length}/{defaultProxyPorts.length}
+              </strong>
+            </section>
           </div>
           <div className="surface-list single-column">
             {platformPathRows.map((row) => (
@@ -684,6 +716,23 @@ export function App() {
                 {systemProxy?.anyEnabled ? "Enabled" : "Disabled"}
               </span>
             </article>
+            {defaultProxyPorts.map((port) => (
+              <article key={`${port.track}-${port.port}`} className="surface-row">
+                <div>
+                  <strong>
+                    {proxyTrackLabel(port.track)} · {port.bindHost}:{port.port}
+                  </strong>
+                  <span>
+                    {port.owner
+                      ? `PID ${port.owner.processId}${port.owner.imagePath ? ` · ${port.owner.imagePath}` : ""}`
+                      : port.errorMessage ?? "Available"}
+                  </span>
+                </div>
+                <span className={`status ${port.available ? "runtime-running" : "runtime-failed"}`}>
+                  {port.available ? "Free" : "Busy"}
+                </span>
+              </article>
+            ))}
             {(browserProfiles.length
               ? browserProfiles.slice(0, 4)
               : [{ browserName: "Browser profile", profileName: "Not detected", cookiesDbPath: "" }]
