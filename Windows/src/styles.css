@@ -463,7 +463,8 @@ nav {
 }
 
 .setting-row input[type="text"],
-.setting-row input[type="password"] {
+.setting-row input[type="password"],
+.setting-row input[type="number"] {
   min-width: 0;
   width: min(260px, 100%);
   padding: 6px 8px;
@@ -485,6 +486,16 @@ nav {
 
 .credential-list {
   margin-top: 10px;
+}
+
+.proxy-control-form {
+  margin-bottom: 12px;
+}
+
+.proxy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .settings-path,

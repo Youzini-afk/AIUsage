@@ -14,12 +14,14 @@ import {
   MessageSquareText,
   MonitorCog,
   Network,
+  Play,
   RefreshCw,
   RotateCcw,
   Save,
   Settings,
   ServerCog,
   ShieldCheck,
+  Square,
   TerminalSquare,
   Trash2
 } from "lucide-react";
@@ -34,6 +36,8 @@ type ProductSurface = {
 };
 
 type ProxyTrack = "claudeCode" | "codex" | "openCode" | "global";
+
+type ProxyProtocol = "openAiResponses" | "openAiChatCompletions" | "anthropicMessages" | "passthrough";
 
 type DesktopSnapshot = {
   appName: string;
@@ -122,6 +126,29 @@ type ProxyHealth = {
   track: ProxyTrack;
   state: ProxyRuntimeState;
   listeningPort: number | null;
+};
+
+type ProxyRuntimeDraft = {
+  protocol: ProxyProtocol;
+  bindHost: string;
+  port: number;
+  upstreamBaseUrl: string;
+  upstreamApiKey: string;
+  clientKey: string;
+  defaultModel: string;
+};
+
+type ProxyRuntimeConfig = {
+  track: ProxyTrack;
+  nodeId: string;
+  label: string;
+  bindHost: string;
+  port: number;
+  upstreamBaseUrl: string;
+  upstreamApiKey: string | null;
+  clientKey: string | null;
+  protocol: ProxyProtocol;
+  defaultModel: string | null;
 };
 
 type ProxyUsageArchiveSummary = {
@@ -367,6 +394,45 @@ const defaultCredentialForm: CredentialFormState = {
   secret: ""
 };
 
+const defaultProxyDrafts: Record<ProxyTrack, ProxyRuntimeDraft> = {
+  codex: {
+    protocol: "openAiResponses",
+    bindHost: "127.0.0.1",
+    port: 14399,
+    upstreamBaseUrl: "",
+    upstreamApiKey: "",
+    clientKey: "",
+    defaultModel: "gpt-5"
+  },
+  claudeCode: {
+    protocol: "anthropicMessages",
+    bindHost: "127.0.0.1",
+    port: 14400,
+    upstreamBaseUrl: "",
+    upstreamApiKey: "",
+    clientKey: "",
+    defaultModel: "claude-sonnet-4"
+  },
+  openCode: {
+    protocol: "openAiChatCompletions",
+    bindHost: "127.0.0.1",
+    port: 14401,
+    upstreamBaseUrl: "",
+    upstreamApiKey: "",
+    clientKey: "",
+    defaultModel: ""
+  },
+  global: {
+    protocol: "passthrough",
+    bindHost: "127.0.0.1",
+    port: 14402,
+    upstreamBaseUrl: "",
+    upstreamApiKey: "",
+    clientKey: "",
+    defaultModel: ""
+  }
+};
+
 function statusLabel(status: FeatureStatus): string {
   switch (status) {
     case "foundationReady":
@@ -407,6 +473,19 @@ function proxyTrackLabel(track: ProxyHealth["track"]): string {
       return "Global";
     default:
       return "Codex";
+  }
+}
+
+function proxyProtocolLabel(protocol: ProxyProtocol): string {
+  switch (protocol) {
+    case "anthropicMessages":
+      return "Anthropic Messages";
+    case "openAiChatCompletions":
+      return "OpenAI Chat";
+    case "passthrough":
+      return "Passthrough";
+    default:
+      return "OpenAI Responses";
   }
 }
 
@@ -591,6 +670,11 @@ export function App() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>(fallbackSnapshot);
   const [platformEnvironment, setPlatformEnvironment] = useState<PlatformEnvironmentSnapshot | null>(null);
   const [proxyHealth, setProxyHealth] = useState<ProxyHealth[]>([]);
+  const [activeProxyTrack, setActiveProxyTrack] = useState<ProxyTrack>("codex");
+  const [proxyDrafts, setProxyDrafts] = useState<Record<ProxyTrack, ProxyRuntimeDraft>>(defaultProxyDrafts);
+  const [proxyActionBusy, setProxyActionBusy] = useState<"preflight" | "start" | "stop" | null>(null);
+  const [proxyActionError, setProxyActionError] = useState<string | null>(null);
+  const [proxyPreflightResult, setProxyPreflightResult] = useState<ProxyPortPreflight | null>(null);
   const [proxyArchives, setProxyArchives] = useState<ProxyUsageArchiveSummary[]>([]);
   const [proxyUsageStats, setProxyUsageStats] = useState<ProxyUsageStats | null>(null);
   const [callInventory, setCallInventory] = useState<CallAnalyticsInventorySnapshot | null>(null);
@@ -688,6 +772,11 @@ export function App() {
 
   const readyCount = snapshot.surfaces.filter((surface) => surface.status !== "planned").length;
   const runningProxyCount = proxyHealth.filter((health) => health.state === "running").length;
+  const activeProxyDraft = proxyDrafts[activeProxyTrack];
+  const activeProxyHealth = proxyHealth.find((health) => health.track === activeProxyTrack);
+  const activeProxyRunning = activeProxyHealth?.state === "running";
+  const activeProxyPortValid =
+    Number.isInteger(activeProxyDraft.port) && activeProxyDraft.port > 0 && activeProxyDraft.port <= 65_535;
   const archivedUsageRows = proxyArchives.reduce((total, archive) => total + archive.records, 0);
   const totalProxyTokens = proxyUsageStats
     ? proxyUsageStats.totals.inputTokens +
@@ -893,6 +982,92 @@ export function App() {
       })
       .catch((error) => setCredentialError(formatTauriRuntimeError(error, "Credential vault")))
       .finally(() => setDeletingCredentialId(null));
+  }
+
+  function updateProxyDraft(track: ProxyTrack, patch: Partial<ProxyRuntimeDraft>) {
+    setProxyDrafts((previous) => ({
+      ...previous,
+      [track]: {
+        ...previous[track],
+        ...patch
+      }
+    }));
+    setProxyPreflightResult(null);
+  }
+
+  function upsertProxyHealth(updated: ProxyHealth) {
+    setProxyHealth((previous) => {
+      const next = previous.filter((health) => health.track !== updated.track);
+      next.push(updated);
+      return next;
+    });
+  }
+
+  function buildProxyRuntimeConfig(track: ProxyTrack, draft: ProxyRuntimeDraft): ProxyRuntimeConfig {
+    return {
+      track,
+      nodeId: `${track}-local`,
+      label: `${proxyTrackLabel(track)} local proxy`,
+      bindHost: draft.bindHost.trim(),
+      port: draft.port,
+      upstreamBaseUrl: draft.upstreamBaseUrl.trim(),
+      upstreamApiKey: draft.upstreamApiKey.trim() || null,
+      clientKey: draft.clientKey.trim() || null,
+      protocol: draft.protocol,
+      defaultModel: draft.defaultModel.trim() || null
+    };
+  }
+
+  function runProxyPortPreflight() {
+    setProxyActionBusy("preflight");
+    setProxyActionError(null);
+    invoke<ProxyPortPreflight>("proxy_port_preflight", {
+      track: activeProxyTrack,
+      bindHost: activeProxyDraft.bindHost,
+      port: activeProxyDraft.port
+    })
+      .then(setProxyPreflightResult)
+      .catch((error) => setProxyActionError(formatTauriRuntimeError(error, "Proxy runtime")))
+      .finally(() => setProxyActionBusy(null));
+  }
+
+  async function startSelectedProxy() {
+    setProxyActionBusy("start");
+    setProxyActionError(null);
+    try {
+      const preflight = await invoke<ProxyPortPreflight>("proxy_port_preflight", {
+        track: activeProxyTrack,
+        bindHost: activeProxyDraft.bindHost,
+        port: activeProxyDraft.port
+      });
+      setProxyPreflightResult(preflight);
+      if (!preflight.available) {
+        setProxyActionError(
+          preflight.owner
+            ? `Port ${preflight.port} is owned by PID ${preflight.owner.processId}`
+            : preflight.errorMessage ?? `Port ${preflight.port} is busy`
+        );
+        return;
+      }
+
+      const health = await invoke<ProxyHealth>("start_proxy", {
+        config: buildProxyRuntimeConfig(activeProxyTrack, activeProxyDraft)
+      });
+      upsertProxyHealth(health);
+    } catch (error) {
+      setProxyActionError(formatTauriRuntimeError(error, "Proxy runtime"));
+    } finally {
+      setProxyActionBusy(null);
+    }
+  }
+
+  function stopSelectedProxy() {
+    setProxyActionBusy("stop");
+    setProxyActionError(null);
+    invoke<ProxyHealth>("stop_proxy", { track: activeProxyTrack })
+      .then(upsertProxyHealth)
+      .catch((error) => setProxyActionError(formatTauriRuntimeError(error, "Proxy runtime")))
+      .finally(() => setProxyActionBusy(null));
   }
 
   async function checkForUpdates() {
@@ -1753,6 +1928,148 @@ export function App() {
               <h3>Proxy supervisor</h3>
             </div>
             <ServerCog size={18} />
+          </div>
+          <div className="settings-list proxy-control-form">
+            <label className="setting-row">
+              <span>Track</span>
+              <select
+                value={activeProxyTrack}
+                onChange={(event) => {
+                  setActiveProxyTrack(event.target.value as ProxyTrack);
+                  setProxyPreflightResult(null);
+                }}
+              >
+                {(["codex", "claudeCode", "openCode", "global"] satisfies ProxyTrack[]).map((track) => (
+                  <option key={track} value={track}>
+                    {proxyTrackLabel(track)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="setting-row">
+              <span>Protocol</span>
+              <select
+                value={activeProxyDraft.protocol}
+                onChange={(event) =>
+                  updateProxyDraft(activeProxyTrack, { protocol: event.target.value as ProxyProtocol })
+                }
+              >
+                {(["openAiResponses", "openAiChatCompletions", "anthropicMessages", "passthrough"] satisfies ProxyProtocol[]).map(
+                  (protocol) => (
+                    <option key={protocol} value={protocol}>
+                      {proxyProtocolLabel(protocol)}
+                    </option>
+                  )
+                )}
+              </select>
+            </label>
+            <label className="setting-row">
+              <span>Bind host</span>
+              <input
+                type="text"
+                value={activeProxyDraft.bindHost}
+                onChange={(event) => updateProxyDraft(activeProxyTrack, { bindHost: event.target.value })}
+              />
+            </label>
+            <label className="setting-row">
+              <span>Port</span>
+              <input
+                type="number"
+                min={1}
+                max={65535}
+                value={activeProxyDraft.port}
+                onChange={(event) => updateProxyDraft(activeProxyTrack, { port: Number(event.target.value) })}
+              />
+            </label>
+            <label className="setting-row">
+              <span>Upstream URL</span>
+              <input
+                type="text"
+                value={activeProxyDraft.upstreamBaseUrl}
+                onChange={(event) => updateProxyDraft(activeProxyTrack, { upstreamBaseUrl: event.target.value })}
+              />
+            </label>
+            <label className="setting-row">
+              <span>Upstream key</span>
+              <input
+                type="password"
+                value={activeProxyDraft.upstreamApiKey}
+                autoComplete="new-password"
+                onChange={(event) => updateProxyDraft(activeProxyTrack, { upstreamApiKey: event.target.value })}
+              />
+            </label>
+            <label className="setting-row">
+              <span>Client key</span>
+              <input
+                type="password"
+                value={activeProxyDraft.clientKey}
+                autoComplete="new-password"
+                onChange={(event) => updateProxyDraft(activeProxyTrack, { clientKey: event.target.value })}
+              />
+            </label>
+            <label className="setting-row">
+              <span>Model</span>
+              <input
+                type="text"
+                value={activeProxyDraft.defaultModel}
+                onChange={(event) => updateProxyDraft(activeProxyTrack, { defaultModel: event.target.value })}
+              />
+            </label>
+            <div className="proxy-actions">
+              <button
+                className="action-button"
+                type="button"
+                onClick={runProxyPortPreflight}
+                disabled={proxyActionBusy !== null || !activeProxyDraft.bindHost.trim() || !activeProxyPortValid}
+              >
+                <Gauge size={16} />
+                <span>{proxyActionBusy === "preflight" ? "Checking" : "Preflight"}</span>
+              </button>
+              <button
+                className="action-button primary-action"
+                type="button"
+                onClick={startSelectedProxy}
+                disabled={
+                  proxyActionBusy !== null ||
+                  activeProxyRunning ||
+                  !activeProxyDraft.bindHost.trim() ||
+                  !activeProxyPortValid ||
+                  !activeProxyDraft.upstreamBaseUrl.trim()
+                }
+              >
+                <Play size={16} />
+                <span>{proxyActionBusy === "start" ? "Starting" : "Start"}</span>
+              </button>
+              <button
+                className="action-button"
+                type="button"
+                onClick={stopSelectedProxy}
+                disabled={proxyActionBusy !== null || !activeProxyRunning}
+              >
+                <Square size={16} />
+                <span>{proxyActionBusy === "stop" ? "Stopping" : "Stop"}</span>
+              </button>
+            </div>
+            {proxyPreflightResult ? (
+              <article className="surface-row">
+                <div>
+                  <strong>
+                    {proxyTrackLabel(proxyPreflightResult.track)} · {proxyPreflightResult.bindHost}:{proxyPreflightResult.port}
+                  </strong>
+                  <span>
+                    {proxyPreflightResult.owner
+                      ? `PID ${proxyPreflightResult.owner.processId}${
+                          proxyPreflightResult.owner.imagePath ? ` · ${proxyPreflightResult.owner.imagePath}` : ""
+                        }`
+                      : proxyPreflightResult.errorMessage ?? "Available"}
+                  </span>
+                </div>
+                <span className={`status ${proxyPreflightResult.available ? "runtime-running" : "runtime-failed"}`}>
+                  {proxyPreflightResult.available ? "Free" : "Busy"}
+                </span>
+              </article>
+            ) : null}
+            {proxyActionError ? <div className="settings-error">{proxyActionError}</div> : null}
           </div>
           <div className="surface-list single-column">
             {(proxyHealth.length ? proxyHealth : [

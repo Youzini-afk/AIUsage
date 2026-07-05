@@ -80,6 +80,7 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 ## Proxy Runtime
 
 - Start each proxy track with a local test upstream.
+- Use the Proxy supervisor UI to preflight, start, and stop each proxy track.
 - Confirm `/health` returns the correct track and listening port.
 - Send authorized and unauthorized requests; confirm client-key enforcement.
 - Confirm OpenAI and Anthropic usage shapes are parsed into archive rows.

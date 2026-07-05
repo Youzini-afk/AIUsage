@@ -106,6 +106,7 @@ Deliverables:
 - Settings.
 - Config takeover control panel for target path, backup, parse-warning, and restore visibility.
 - WSL config target status in the control panel, with restore/write actions gated until the explicit WSL activation path is complete.
+- Proxy supervisor control panel for per-track protocol, bind, port preflight, start, and stop.
 - Tray menu and background behavior. The current Tauri shell implements Show AIUsage, Open Settings, Quit AIUsage, click-to-restore, close-to-tray, and explicit quit bypass; tray refresh/proxy shortcuts remain part of UI parity work.
 
 Completion criteria:

@@ -73,6 +73,8 @@ Only stop processes you recognize. AIUsage should only stop AIUsage-owned proxy 
 Check:
 
 - The proxy track shows `Running` in Runtime health.
+- The Proxy supervisor UI has a valid bind host, port, protocol, and upstream URL for the selected track.
+- The Proxy supervisor UI `Preflight` action reports the port as `Free`.
 - The CLI config points to the expected local base URL and port.
 - The request includes the expected client key when the track is configured with one.
 - The upstream base URL is reachable from the Windows machine.
