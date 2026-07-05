@@ -26,10 +26,11 @@ Windows/
 │   ├── aiusage-core      # shared product schemas and domain contracts
 │   ├── aiusage-platform  # platform adapter traits
 │   ├── aiusage-windows   # Windows adapter implementations
+│   ├── aiusage-services  # app services: config takeover, backup/restore, status
 │   ├── aiusage-proxy     # proxy runtime boundary
 │   ├── aiusage-tauri     # Tauri command/event boundary
 │   └── aiusage-fixtures  # fixture and parity-test helpers
 └── fixtures/             # schema fixtures used by contract tests
 ```
 
-Phase A establishes the app shell, crate boundaries, CI hooks, and schema/fixture harness. Later phases fill in Windows-native credentials, provider refresh, proxy runtime, installer/signing, and release automation.
+The current Windows line includes the app shell, schema/fixture harness, core Windows adapters, and Codex/OpenCode config takeover services with backup/restore semantics. Later phases fill in Claude config takeover, provider refresh, proxy runtime, full UI parity, installer/signing, and release automation.

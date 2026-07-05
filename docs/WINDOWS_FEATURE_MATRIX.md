@@ -21,6 +21,16 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | Auto-update | Sparkle | Tauri updater | Separate signed update feed/metadata |
 | Installer | DMG/ZIP | NSIS + MSI | Signed, upgrade-safe, uninstall-safe |
 
+## Current Windows Implementation Checkpoints
+
+| Area | Current status |
+| --- | --- |
+| Desktop shell | Tauri 2 + React + Rust workspace builds on Windows |
+| Contract schema | Core product surfaces, provider identities, proxy tracks, and release targets are covered by fixture tests |
+| Platform adapters | Windows app paths, Credential Manager + DPAPI vault, browser profile discovery, system proxy snapshot, and TCP port owner lookup are implemented behind traits |
+| Config transforms | Codex `config.toml` managed blocks and OpenCode provider/model injection are implemented in `aiusage-core` |
+| Config takeover service | Codex/OpenCode native Windows paths, custom paths, sidecar `.aiusage.bak` backups, idempotent activation, restore, JSONC parsing, and Tauri commands are implemented |
+
 ## Provider Matrix
 
 | Provider | Windows parity target | Windows-specific work |

@@ -52,11 +52,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiusage-services"
+version = "0.1.0"
+dependencies = [
+ "aiusage-core",
+ "aiusage-platform",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "aiusage-tauri"
 version = "0.1.0"
 dependencies = [
  "aiusage-core",
  "aiusage-platform",
+ "aiusage-services",
  "aiusage-windows",
  "serde",
 ]

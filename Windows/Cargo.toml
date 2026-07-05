@@ -5,6 +5,7 @@ members = [
     "crates/aiusage-core",
     "crates/aiusage-platform",
     "crates/aiusage-proxy",
+    "crates/aiusage-services",
     "crates/aiusage-windows",
     "crates/aiusage-tauri",
     "crates/aiusage-fixtures",
@@ -20,9 +21,11 @@ rust-version = "1.80"
 aiusage-core = { path = "crates/aiusage-core" }
 aiusage-platform = { path = "crates/aiusage-platform" }
 aiusage-proxy = { path = "crates/aiusage-proxy" }
+aiusage-services = { path = "crates/aiusage-services" }
 aiusage-windows = { path = "crates/aiusage-windows" }
 aiusage-tauri = { path = "crates/aiusage-tauri" }
 aiusage-fixtures = { path = "crates/aiusage-fixtures" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tempfile = "3"
 thiserror = "2"

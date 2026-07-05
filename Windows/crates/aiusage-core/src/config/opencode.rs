@@ -49,6 +49,53 @@ pub fn strip_opencode_managed_entries(root: &Value) -> Value {
     Value::Object(result)
 }
 
+pub fn opencode_has_managed_entries(root: &Value) -> bool {
+    if let Some(provider) = root.get("provider").and_then(Value::as_object) {
+        if provider
+            .keys()
+            .any(|key| is_managed_opencode_provider_key(key))
+        {
+            return true;
+        }
+    }
+
+    root.get("model")
+        .and_then(Value::as_str)
+        .and_then(|model| model.split_once('/').map(|(provider, _)| provider))
+        .map(is_managed_opencode_provider_key)
+        .unwrap_or(false)
+}
+
+pub fn deep_merge_json(base: &Value, overlay: &Value) -> Value {
+    match (base, overlay) {
+        (Value::Object(base_object), Value::Object(overlay_object)) => {
+            let mut merged = base_object.clone();
+            for (key, value) in overlay_object {
+                let next = merged
+                    .get(key)
+                    .map(|existing| deep_merge_json(existing, value))
+                    .unwrap_or_else(|| value.clone());
+                merged.insert(key.clone(), next);
+            }
+            Value::Object(merged)
+        }
+        (_, overlay) => overlay.clone(),
+    }
+}
+
+pub fn inject_opencode_managed_config_with_base(
+    root: &Value,
+    base_settings: Option<&Value>,
+    node: &OpenCodeManagedNode,
+) -> Value {
+    let clean = strip_opencode_managed_entries(root);
+    let merged = base_settings
+        .map(strip_opencode_managed_entries)
+        .map(|base| deep_merge_json(&clean, &base))
+        .unwrap_or(clean);
+    inject_opencode_managed_config(&merged, node)
+}
+
 pub fn inject_opencode_managed_config(root: &Value, node: &OpenCodeManagedNode) -> Value {
     let mut result = strip_opencode_managed_entries(root)
         .as_object()
