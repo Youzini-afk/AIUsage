@@ -72,6 +72,7 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 - Test OpenCode JSON and JSONC activation; confirm comments/trailing commas survive backup/restore.
 - Confirm all destructive operations show target path and backup state in UI.
 - Confirm the Config takeover panel shows Claude, Codex, and OpenCode target paths, managed state, backup state, and parse warnings.
+- Use native Apply actions for Claude, Codex, and OpenCode after setting proxy drafts; confirm target files are created with local proxy URLs and managed markers.
 - Confirm restore actions are disabled when neither managed content nor backup exists.
 - On a machine with WSL, confirm the Config takeover panel shows WSL target rows as `WSL` and keeps WSL restore disabled until explicit WSL activation support is enabled.
 - Confirm native Windows and WSL targets are never silently mixed.

@@ -143,6 +143,7 @@ Check:
 - The UI shows the target config path before activation/restore.
 - The Config takeover panel shows `Managed`, `Detected`, `Missing`, or `Warning` for each native target.
 - WSL rows appear as `WSL` targets when AIUsage can resolve a distro home path.
+- Native/custom Apply actions use the matching proxy draft port, client key, and model from the Proxy supervisor panel.
 - The backup path exists after activation when the original file existed.
 - Restore is enabled only when AIUsage detects managed content or a sidecar backup.
 - WSL restore remains disabled until explicit WSL activation support is enabled.

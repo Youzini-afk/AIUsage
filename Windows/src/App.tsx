@@ -590,6 +590,36 @@ function canRestoreManagedConfig(status: ManagedConfigStatus): boolean {
   return status.targetKind !== "wslDistribution" && (status.managed || status.backupExists);
 }
 
+function proxyTrackForManagedConfig(kind: ManagedConfigKind): ProxyTrack {
+  switch (kind) {
+    case "claude":
+      return "claudeCode";
+    case "openCode":
+      return "openCode";
+    default:
+      return "codex";
+  }
+}
+
+function localProxyClientHost(bindHost: string): string {
+  const host = bindHost.trim();
+  if (!host || host === "0.0.0.0") {
+    return "127.0.0.1";
+  }
+  if (host === "::" || host === "[::]") {
+    return "[::1]";
+  }
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+function localProxyBaseUrl(draft: ProxyRuntimeDraft, suffix = ""): string {
+  return `http://${localProxyClientHost(draft.bindHost)}:${draft.port}${suffix}`;
+}
+
+function proxyDraftHasValidPort(draft: ProxyRuntimeDraft): boolean {
+  return Number.isInteger(draft.port) && draft.port > 0 && draft.port <= 65_535;
+}
+
 function credentialKindLabel(kind: CredentialKind): string {
   switch (kind) {
     case "apiKey":
@@ -693,7 +723,7 @@ export function App() {
   const [callSnapshot, setCallSnapshot] = useState<CallAnalyticsSnapshot | null>(null);
   const [managedConfigStatuses, setManagedConfigStatuses] = useState<ManagedConfigStatus[]>([]);
   const [managedConfigError, setManagedConfigError] = useState<string | null>(null);
-  const [managedConfigBusy, setManagedConfigBusy] = useState<ManagedConfigKind | null>(null);
+  const [managedConfigBusy, setManagedConfigBusy] = useState<string | null>(null);
   const [appSettings, setAppSettings] = useState<AppSettingsSnapshot | null>(null);
   const [diagnosticsExport, setDiagnosticsExport] = useState<DiagnosticsExportSnapshot | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
@@ -787,8 +817,7 @@ export function App() {
   const activeProxyDraft = proxyDrafts[activeProxyTrack];
   const activeProxyHealth = proxyHealth.find((health) => health.track === activeProxyTrack);
   const activeProxyRunning = activeProxyHealth?.state === "running";
-  const activeProxyPortValid =
-    Number.isInteger(activeProxyDraft.port) && activeProxyDraft.port > 0 && activeProxyDraft.port <= 65_535;
+  const activeProxyPortValid = proxyDraftHasValidPort(activeProxyDraft);
   const archivedUsageRows = proxyArchives.reduce((total, archive) => total + archive.records, 0);
   const totalProxyTokens = proxyUsageStats
     ? proxyUsageStats.totals.inputTokens +
@@ -938,6 +967,82 @@ export function App() {
       .finally(() => setLocalCertificateAuthorityBusy(false));
   }
 
+  function canActivateManagedConfig(status: ManagedConfigStatus): boolean {
+    if (status.targetKind === "wslDistribution") {
+      return false;
+    }
+    const draft = proxyDrafts[proxyTrackForManagedConfig(status.kind)];
+    if (!draft.bindHost.trim() || !proxyDraftHasValidPort(draft)) {
+      return false;
+    }
+    return status.kind !== "openCode" || Boolean(draft.defaultModel.trim());
+  }
+
+  function upsertManagedConfigStatus(updated: ManagedConfigStatus) {
+    setManagedConfigStatuses((previous) =>
+      previous.map((row) =>
+        row.kind === updated.kind && row.targetKind === updated.targetKind && row.configPath === updated.configPath
+          ? updated
+          : row
+      )
+    );
+  }
+
+  function applyManagedConfig(status: ManagedConfigStatus) {
+    const track = proxyTrackForManagedConfig(status.kind);
+    const draft = proxyDrafts[track];
+    const configPath = status.targetKind === "customPath" ? status.configPath : null;
+    let command = "apply_codex_config";
+    let request: unknown;
+
+    if (status.kind === "claude") {
+      command = "apply_claude_config";
+      request = {
+        settings: {
+          baseUrl: localProxyBaseUrl(draft),
+          authToken: draft.clientKey.trim() || null,
+          defaultModel: draft.defaultModel.trim() || null,
+          opusModel: null,
+          sonnetModel: null,
+          haikuModel: null,
+          nodeExtraCaCerts: null
+        },
+        configPath
+      };
+    } else if (status.kind === "openCode") {
+      command = "apply_opencode_config";
+      request = {
+        node: {
+          managedProviderId: "aiusage-main",
+          displayName: "AIUsage Main",
+          npmPackage: "@ai-sdk/openai-compatible",
+          baseUrl: localProxyBaseUrl(draft, "/v1"),
+          apiKey: draft.clientKey.trim() || null,
+          defaultModel: draft.defaultModel.trim(),
+          models: [{ id: draft.defaultModel.trim(), displayName: draft.defaultModel.trim() }]
+        },
+        commonSettings: null,
+        configPath
+      };
+    } else {
+      request = {
+        baseUrl: localProxyBaseUrl(draft, "/v1"),
+        bearerToken: draft.clientKey.trim(),
+        model: draft.defaultModel.trim() || "gpt-5",
+        globalToml: "",
+        nodeToml: "",
+        configPath
+      };
+    }
+
+    setManagedConfigBusy(status.kind);
+    setManagedConfigError(null);
+    invoke<ManagedConfigStatus>(command, { request })
+      .then(upsertManagedConfigStatus)
+      .catch((error) => setManagedConfigError(formatTauriRuntimeError(error, "Config takeover")))
+      .finally(() => setManagedConfigBusy(null));
+  }
+
   function runManagedConfigRestore(status: ManagedConfigStatus) {
     const command = managedConfigRestoreCommand(status.kind);
     setManagedConfigBusy(status.kind);
@@ -945,11 +1050,7 @@ export function App() {
     invoke<ManagedConfigStatus>(command, {
       configPath: status.targetKind === "customPath" ? status.configPath : null
     })
-      .then((updated) =>
-        setManagedConfigStatuses((previous) =>
-          previous.map((row) => (row.kind === updated.kind ? updated : row))
-        )
-      )
+      .then(upsertManagedConfigStatus)
       .catch((error) => setManagedConfigError(formatTauriRuntimeError(error, "Config takeover")))
       .finally(() => setManagedConfigBusy(null));
   }
@@ -1508,6 +1609,16 @@ export function App() {
                 </div>
                 <div className="row-actions">
                   <span className={`status ${managedConfigStatusClass(status)}`}>{managedConfigStatusLabel(status)}</span>
+                  <button
+                    className="icon-action"
+                    type="button"
+                    title={`Apply ${managedConfigKindLabel(status.kind)}`}
+                    aria-label={`Apply ${managedConfigKindLabel(status.kind)}`}
+                    disabled={managedConfigBusy === status.kind || !canActivateManagedConfig(status)}
+                    onClick={() => applyManagedConfig(status)}
+                  >
+                    <Save size={15} />
+                  </button>
                   <button
                     className="icon-action"
                     type="button"
