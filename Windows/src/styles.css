@@ -462,10 +462,29 @@ nav {
   color: #17202a;
 }
 
+.setting-row input[type="text"],
+.setting-row input[type="password"] {
+  min-width: 0;
+  width: min(260px, 100%);
+  padding: 6px 8px;
+  border: 1px solid #cfd9de;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #17202a;
+}
+
 .setting-row input[type="checkbox"] {
   width: 18px;
   height: 18px;
   accent-color: #0f766e;
+}
+
+.credential-form {
+  margin-bottom: 10px;
+}
+
+.credential-list {
+  margin-top: 10px;
 }
 
 .settings-path,

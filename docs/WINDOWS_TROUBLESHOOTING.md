@@ -128,6 +128,7 @@ Check:
 - Enterprise policy does not block generic credentials.
 - Credential summaries in the UI never show secret values.
 - Deleting a credential from AIUsage removes or updates the corresponding vault item.
+- The Credential Vault UI accepts provider, kind, label, and secret, then clears the secret field after saving.
 
 Do not paste Credential Manager secret blobs into bug reports.
 

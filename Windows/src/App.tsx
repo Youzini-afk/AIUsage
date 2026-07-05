@@ -16,10 +16,12 @@ import {
   Network,
   RefreshCw,
   RotateCcw,
+  Save,
   Settings,
   ServerCog,
   ShieldCheck,
-  TerminalSquare
+  TerminalSquare,
+  Trash2
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -269,10 +271,25 @@ type CredentialSummary = {
   id: string;
   providerId: string;
   label: string;
-  kind: string;
+  kind: CredentialKind;
   hasSecret: boolean;
   metadata: unknown;
   updatedAtEpochMs: number;
+};
+
+type CredentialKind = "apiKey" | "authFile" | "cookie" | "oAuth" | "token" | "webSession";
+
+type CredentialProviderOption = {
+  id: string;
+  label: string;
+  kinds: CredentialKind[];
+};
+
+type CredentialFormState = {
+  providerId: string;
+  label: string;
+  kind: CredentialKind;
+  secret: string;
 };
 
 type UpdaterState = "idle" | "checking" | "current" | "available" | "downloading" | "installing" | "installed" | "error";
@@ -331,6 +348,23 @@ const defaultAppSettings: AppSettingsDocument = {
   minimizeToTrayOnClose: true,
   keepRunningInBackground: true,
   launchAtLogin: false
+};
+
+const credentialProviderOptions: CredentialProviderOption[] = [
+  { id: "codex", label: "Codex", kinds: ["token", "authFile"] },
+  { id: "copilot", label: "Copilot", kinds: ["token", "oAuth"] },
+  { id: "cursor", label: "Cursor", kinds: ["cookie", "webSession"] },
+  { id: "gemini", label: "Gemini CLI", kinds: ["authFile", "oAuth"] },
+  { id: "opencode", label: "OpenCode", kinds: ["apiKey", "authFile"] }
+];
+
+const allCredentialKinds: CredentialKind[] = ["apiKey", "authFile", "cookie", "oAuth", "token", "webSession"];
+
+const defaultCredentialForm: CredentialFormState = {
+  providerId: "opencode",
+  label: "",
+  kind: "apiKey",
+  secret: ""
 };
 
 function statusLabel(status: FeatureStatus): string {
@@ -465,6 +499,34 @@ function canRestoreManagedConfig(status: ManagedConfigStatus): boolean {
   return status.targetKind !== "wslDistribution" && (status.managed || status.backupExists);
 }
 
+function credentialKindLabel(kind: CredentialKind): string {
+  switch (kind) {
+    case "apiKey":
+      return "API key";
+    case "authFile":
+      return "Auth file";
+    case "cookie":
+      return "Cookie";
+    case "oAuth":
+      return "OAuth";
+    case "webSession":
+      return "Web session";
+    default:
+      return "Token";
+  }
+}
+
+function credentialProviderLabel(providerId: string): string {
+  return credentialProviderOptions.find((provider) => provider.id === providerId)?.label ?? providerId;
+}
+
+function formatEpochMs(epochMs: number): string {
+  if (!epochMs) {
+    return "Not synced";
+  }
+  return new Date(epochMs).toLocaleString();
+}
+
 function updaterStateLabel(state: UpdaterState): string {
   switch (state) {
     case "checking":
@@ -549,6 +611,10 @@ export function App() {
   const [updaterError, setUpdaterError] = useState<string | null>(null);
   const [updaterProgress, setUpdaterProgress] = useState<UpdaterProgress | null>(null);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
+  const [credentialForm, setCredentialForm] = useState<CredentialFormState>(defaultCredentialForm);
+  const [credentialBusy, setCredentialBusy] = useState(false);
+  const [credentialError, setCredentialError] = useState<string | null>(null);
+  const [deletingCredentialId, setDeletingCredentialId] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState("dashboard");
 
   useEffect(() => {
@@ -724,6 +790,10 @@ export function App() {
   const managedConfigManagedCount = managedConfigStatuses.filter((status) => status.managed).length;
   const managedConfigBackupCount = managedConfigStatuses.filter((status) => status.backupExists).length;
   const managedConfigWarningCount = managedConfigStatuses.filter((status) => status.parseError).length;
+  const selectedCredentialProvider =
+    credentialProviderOptions.find((provider) => provider.id === credentialForm.providerId) ??
+    credentialProviderOptions[0];
+  const credentialKindOptions = selectedCredentialProvider?.kinds ?? allCredentialKinds;
   const updaterBusy = updaterState === "checking" || updaterState === "downloading" || updaterState === "installing";
   const updaterProgressPercent =
     updaterProgress?.contentLength && updaterProgress.contentLength > 0
@@ -781,6 +851,48 @@ export function App() {
       )
       .catch((error) => setManagedConfigError(formatTauriRuntimeError(error, "Config takeover")))
       .finally(() => setManagedConfigBusy(null));
+  }
+
+  function updateCredentialProvider(providerId: string) {
+    const provider = credentialProviderOptions.find((option) => option.id === providerId);
+    setCredentialForm((previous) => ({
+      ...previous,
+      providerId,
+      kind: provider?.kinds[0] ?? previous.kind
+    }));
+  }
+
+  function saveCredential() {
+    setCredentialBusy(true);
+    setCredentialError(null);
+    invoke<CredentialSummary>("save_provider_credential", {
+      request: {
+        providerId: credentialForm.providerId,
+        label: credentialForm.label,
+        kind: credentialForm.kind,
+        secret: credentialForm.secret,
+        metadata: { source: "windows-ui" }
+      }
+    })
+      .then((summary) => {
+        setCredentials((previous) => [summary, ...previous.filter((credential) => credential.id !== summary.id)]);
+        setCredentialForm(defaultCredentialForm);
+      })
+      .catch((error) => setCredentialError(formatTauriRuntimeError(error, "Credential vault")))
+      .finally(() => setCredentialBusy(false));
+  }
+
+  function deleteCredentialSummary(summary: CredentialSummary) {
+    setDeletingCredentialId(summary.id);
+    setCredentialError(null);
+    invoke<boolean>("delete_provider_credential", { id: summary.id })
+      .then((removed) => {
+        if (removed) {
+          setCredentials((previous) => previous.filter((credential) => credential.id !== summary.id));
+        }
+      })
+      .catch((error) => setCredentialError(formatTauriRuntimeError(error, "Credential vault")))
+      .finally(() => setDeletingCredentialId(null));
   }
 
   async function checkForUpdates() {
@@ -1224,6 +1336,123 @@ export function App() {
             ))}
           </div>
           {managedConfigError ? <div className="settings-error">{managedConfigError}</div> : null}
+        </section>
+
+        <section className="panel compact-panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Credential vault</p>
+              <h3>Provider credentials</h3>
+            </div>
+            <KeyRound size={18} />
+          </div>
+          <div className="settings-list credential-form">
+            <label className="setting-row">
+              <span>Provider</span>
+              <select value={credentialForm.providerId} onChange={(event) => updateCredentialProvider(event.target.value)}>
+                {credentialProviderOptions.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="setting-row">
+              <span>Kind</span>
+              <select
+                value={credentialForm.kind}
+                onChange={(event) =>
+                  setCredentialForm((previous) => ({
+                    ...previous,
+                    kind: event.target.value as CredentialKind
+                  }))
+                }
+              >
+                {credentialKindOptions.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {credentialKindLabel(kind)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="setting-row">
+              <span>Label</span>
+              <input
+                type="text"
+                value={credentialForm.label}
+                onChange={(event) =>
+                  setCredentialForm((previous) => ({
+                    ...previous,
+                    label: event.target.value
+                  }))
+                }
+              />
+            </label>
+            <label className="setting-row">
+              <span>Secret</span>
+              <input
+                type="password"
+                value={credentialForm.secret}
+                autoComplete="new-password"
+                onChange={(event) =>
+                  setCredentialForm((previous) => ({
+                    ...previous,
+                    secret: event.target.value
+                  }))
+                }
+              />
+            </label>
+            <button
+              className="action-button primary-action"
+              type="button"
+              onClick={saveCredential}
+              disabled={credentialBusy || !credentialForm.label.trim() || !credentialForm.secret.trim()}
+            >
+              <Save size={16} />
+              <span>{credentialBusy ? "Saving" : "Save credential"}</span>
+            </button>
+          </div>
+          <div className="surface-list single-column credential-list">
+            {credentials.length ? (
+              credentials.map((credential) => (
+                <article key={credential.id} className="surface-row">
+                  <div>
+                    <strong>
+                      {credentialProviderLabel(credential.providerId)} · {credential.label}
+                    </strong>
+                    <span>
+                      {credentialKindLabel(credential.kind)} · {formatEpochMs(credential.updatedAtEpochMs)}
+                    </span>
+                    <span>{credential.hasSecret ? "Secret stored" : "No secret stored"}</span>
+                  </div>
+                  <div className="row-actions">
+                    <span className={`status ${credential.hasSecret ? "complete" : "planned"}`}>
+                      {credential.hasSecret ? "Stored" : "Empty"}
+                    </span>
+                    <button
+                      className="icon-action"
+                      type="button"
+                      title={`Delete ${credential.label}`}
+                      aria-label={`Delete ${credential.label}`}
+                      disabled={deletingCredentialId === credential.id}
+                      onClick={() => deleteCredentialSummary(credential)}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                </article>
+              ))
+            ) : (
+              <article className="surface-row">
+                <div>
+                  <strong>No credentials</strong>
+                  <span>Windows Credential Manager / DPAPI vault</span>
+                </div>
+                <span className="status planned">Empty</span>
+              </article>
+            )}
+          </div>
+          {credentialError ? <div className="settings-error">{credentialError}</div> : null}
         </section>
 
         <section className="panel">

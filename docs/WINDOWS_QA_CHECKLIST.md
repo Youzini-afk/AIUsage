@@ -60,6 +60,7 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 - Confirm the UI only shows secret-free summaries.
 - Confirm the credential is stored in Windows Credential Manager.
 - Delete the credential and confirm the Credential Manager entry updates.
+- Confirm the Credential Vault UI clears the secret field after save and never offers reveal/copy of stored secret values.
 - Upgrade the app and confirm existing credentials remain readable.
 
 ## Config Takeover

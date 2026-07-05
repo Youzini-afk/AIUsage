@@ -195,6 +195,7 @@ Completion criteria:
 - Settings diagnostics export creates a metadata report without raw secrets or log bodies.
 - Settings environment view distinguishes native Windows paths from WSL distro targets.
 - Credential vault survives upgrade.
+- Credential Vault UI saves and deletes provider credentials without revealing stored secret values.
 - Proxy activation/restoration tested for Claude, Codex, OpenCode, and global proxy.
 - Logs and diagnostics can be exported.
 - Uninstall removes app binaries and leaves user data according to documented policy.
