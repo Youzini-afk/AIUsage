@@ -79,6 +79,10 @@ pub trait SystemProxyReader {
     fn current_proxy(&self) -> PlatformResult<SystemProxySnapshot>;
 }
 
+pub trait FilePermissionGuard {
+    fn restrict_current_user(&self, path: &std::path::Path) -> PlatformResult<()>;
+}
+
 pub trait AutostartManager {
     fn is_enabled(&self) -> PlatformResult<bool>;
     fn set_enabled(&self, enabled: bool) -> PlatformResult<()>;

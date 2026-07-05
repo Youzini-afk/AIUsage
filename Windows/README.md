@@ -33,4 +33,4 @@ Windows/
 └── fixtures/             # schema fixtures used by contract tests
 ```
 
-The current Windows line includes the app shell, schema/fixture harness, core Windows adapters, and Claude/Codex/OpenCode config takeover services with backup/restore semantics. Later phases fill in provider refresh, proxy runtime, full UI parity, installer/signing, and release automation.
+The current Windows line includes the app shell, schema/fixture harness, core Windows adapters, sensitive-file permission tightening, and Claude/Codex/OpenCode config takeover services with backup/restore semantics. Later phases fill in provider refresh, proxy runtime, full UI parity, installer/signing, and release automation.

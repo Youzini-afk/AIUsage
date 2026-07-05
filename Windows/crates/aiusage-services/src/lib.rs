@@ -10,7 +10,7 @@ use aiusage_core::{
     strip_claude_managed_settings, strip_codex_managed_blocks, strip_opencode_managed_entries,
     ClaudeManagedSettings, CodexManagedConfig, OpenCodeManagedNode,
 };
-use aiusage_platform::{AppPaths, PlatformError};
+use aiusage_platform::{AppPaths, FilePermissionGuard, PlatformError, PlatformResult};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -30,6 +30,15 @@ pub enum ServiceError {
 }
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
+
+#[derive(Clone, Debug, Default)]
+pub struct NoopFilePermissionGuard;
+
+impl FilePermissionGuard for NoopFilePermissionGuard {
+    fn restrict_current_user(&self, _path: &Path) -> PlatformResult<()> {
+        Ok(())
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,16 +102,30 @@ pub struct OpenCodeActivationRequest {
 }
 
 #[derive(Clone, Debug)]
-pub struct ManagedConfigService<P> {
+pub struct ManagedConfigService<P, G = NoopFilePermissionGuard> {
     paths: P,
+    permissions: G,
 }
 
-impl<P> ManagedConfigService<P>
+impl<P> ManagedConfigService<P, NoopFilePermissionGuard>
 where
     P: AppPaths,
 {
     pub fn new(paths: P) -> Self {
-        Self { paths }
+        Self {
+            paths,
+            permissions: NoopFilePermissionGuard,
+        }
+    }
+}
+
+impl<P, G> ManagedConfigService<P, G>
+where
+    P: AppPaths,
+    G: FilePermissionGuard,
+{
+    pub fn with_permissions(paths: P, permissions: G) -> Self {
+        Self { paths, permissions }
     }
 
     pub fn codex_status(&self, config_path: Option<PathBuf>) -> ServiceResult<ManagedConfigStatus> {
@@ -149,14 +172,14 @@ where
             let current_text = read_text_if_exists(&resolved.path)?.unwrap_or_else(|| "{}".into());
             let current =
                 parse_json_object(&current_text, "Claude settings.json must be a JSON object")?;
-            copy_file_atomically(&resolved.path, &backup_path)?;
+            self.copy_file_sensitive(&resolved.path, &backup_path)?;
             strip_claude_managed_settings(&current)
         } else {
             Value::Object(Default::default())
         };
 
         let next = inject_claude_managed_settings(&pristine, &request.settings);
-        write_json_atomically(&resolved.path, &next)?;
+        self.write_json_sensitive(&resolved.path, &next)?;
         claude_status_for_path(resolved.path, resolved.target_kind)
     }
 
@@ -167,7 +190,7 @@ where
         let resolved = self.resolve_claude_target(config_path)?;
         let backup_path = backup_path_for(&resolved.path);
         if backup_path.exists() {
-            copy_file_atomically(&backup_path, &resolved.path)?;
+            self.copy_file_sensitive(&backup_path, &resolved.path)?;
             fs::remove_file(&backup_path)?;
             return claude_status_for_path(resolved.path, resolved.target_kind);
         }
@@ -185,7 +208,7 @@ where
         {
             remove_file_if_exists(&resolved.path)?;
         } else {
-            write_json_atomically(&resolved.path, &clean)?;
+            self.write_json_sensitive(&resolved.path, &clean)?;
         }
         claude_status_for_path(resolved.path, resolved.target_kind)
     }
@@ -212,7 +235,7 @@ where
             } else {
                 current
             };
-            write_text_atomically(&backup_path, &clean)?;
+            self.write_text_sensitive(&backup_path, &clean)?;
             clean
         } else {
             String::new()
@@ -228,7 +251,7 @@ where
                 node_toml: &request.node_toml,
             },
         );
-        write_text_atomically(&resolved.path, &next)?;
+        self.write_text_sensitive(&resolved.path, &next)?;
         codex_status_for_path(resolved.path, resolved.target_kind)
     }
 
@@ -240,7 +263,7 @@ where
         let backup_path = backup_path_for(&resolved.path);
         if backup_path.exists() {
             let backup = read_text_if_exists(&backup_path)?.unwrap_or_default();
-            write_text_atomically(&resolved.path, &backup)?;
+            self.write_text_sensitive(&resolved.path, &backup)?;
             fs::remove_file(&backup_path)?;
             return codex_status_for_path(resolved.path, resolved.target_kind);
         }
@@ -252,7 +275,7 @@ where
         if clean.trim().is_empty() {
             remove_file_if_exists(&resolved.path)?;
         } else {
-            write_text_atomically(&resolved.path, &clean)?;
+            self.write_text_sensitive(&resolved.path, &clean)?;
         }
         codex_status_for_path(resolved.path, resolved.target_kind)
     }
@@ -272,9 +295,9 @@ where
             let current = parse_json_or_jsonc(&current_text)?;
             let clean = strip_opencode_managed_entries(&current);
             if opencode_has_managed_entries(&current) {
-                write_json_atomically(&backup_path, &clean)?;
+                self.write_json_sensitive(&backup_path, &clean)?;
             } else {
-                copy_file_atomically(&resolved.path, &backup_path)?;
+                self.copy_file_sensitive(&resolved.path, &backup_path)?;
             }
             clean
         } else {
@@ -286,7 +309,7 @@ where
             request.common_settings.as_ref(),
             &request.node,
         );
-        write_json_atomically(&resolved.path, &next)?;
+        self.write_json_sensitive(&resolved.path, &next)?;
         opencode_status_for_path(resolved.path, resolved.target_kind)
     }
 
@@ -297,7 +320,7 @@ where
         let resolved = self.resolve_opencode_target(config_path)?;
         let backup_path = backup_path_for(&resolved.path);
         if backup_path.exists() {
-            copy_file_atomically(&backup_path, &resolved.path)?;
+            self.copy_file_sensitive(&backup_path, &resolved.path)?;
             fs::remove_file(&backup_path)?;
             return opencode_status_for_path(resolved.path, resolved.target_kind);
         }
@@ -314,7 +337,7 @@ where
         {
             remove_file_if_exists(&resolved.path)?;
         } else {
-            write_json_atomically(&resolved.path, &clean)?;
+            self.write_json_sensitive(&resolved.path, &clean)?;
         }
         opencode_status_for_path(resolved.path, resolved.target_kind)
     }
@@ -364,6 +387,27 @@ where
                 }
             }
         })
+    }
+
+    fn write_text_sensitive(&self, path: &Path, text: &str) -> ServiceResult<()> {
+        write_text_atomically(path, text)?;
+        self.restrict_sensitive_file(path)
+    }
+
+    fn write_json_sensitive(&self, path: &Path, value: &Value) -> ServiceResult<()> {
+        write_json_atomically(path, value)?;
+        self.restrict_sensitive_file(path)
+    }
+
+    fn copy_file_sensitive(&self, source: &Path, destination: &Path) -> ServiceResult<()> {
+        copy_file_atomically(source, destination)?;
+        self.restrict_sensitive_file(destination)
+    }
+
+    fn restrict_sensitive_file(&self, path: &Path) -> ServiceResult<()> {
+        self.permissions
+            .restrict_current_user(path)
+            .map_err(ServiceError::Platform)
     }
 }
 

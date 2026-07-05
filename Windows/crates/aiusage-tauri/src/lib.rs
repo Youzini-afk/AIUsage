@@ -1,7 +1,7 @@
 use aiusage_core::phase_a_snapshot;
 use aiusage_platform::AppPaths;
 use aiusage_services::{ManagedConfigService, ServiceError};
-use aiusage_windows::WindowsAppPaths;
+use aiusage_windows::{WindowsAppPaths, WindowsFilePermissionGuard};
 use serde::{Deserialize, Serialize};
 
 pub use aiusage_core::DesktopSnapshot;
@@ -86,8 +86,8 @@ pub fn restore_opencode_config(
     managed_config_service().restore_opencode(config_path)
 }
 
-fn managed_config_service() -> ManagedConfigService<WindowsAppPaths> {
-    ManagedConfigService::new(WindowsAppPaths::new())
+fn managed_config_service() -> ManagedConfigService<WindowsAppPaths, WindowsFilePermissionGuard> {
+    ManagedConfigService::with_permissions(WindowsAppPaths::new(), WindowsFilePermissionGuard)
 }
 
 fn display_path(path: std::path::PathBuf) -> String {

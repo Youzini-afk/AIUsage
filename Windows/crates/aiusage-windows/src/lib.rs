@@ -2,13 +2,14 @@ use std::{
     env,
     ffi::c_void,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     ptr::null_mut,
 };
 
 use aiusage_core::CredentialKind;
 use aiusage_platform::{
-    AppPaths, BrowserProfile, BrowserSessionDiscovery, CredentialVault, PlatformError,
-    PlatformResult, PortInspector, PortOwner, ProtectedData, SystemProxyReader,
+    AppPaths, BrowserProfile, BrowserSessionDiscovery, CredentialVault, FilePermissionGuard,
+    PlatformError, PlatformResult, PortInspector, PortOwner, ProtectedData, SystemProxyReader,
     SystemProxySnapshot,
 };
 use windows::{
@@ -311,6 +312,38 @@ impl PortInspector for WindowsPortInspector {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct WindowsFilePermissionGuard;
+
+impl FilePermissionGuard for WindowsFilePermissionGuard {
+    fn restrict_current_user(&self, path: &Path) -> PlatformResult<()> {
+        if !path.exists() {
+            return Ok(());
+        }
+
+        let account =
+            current_user_account().ok_or(PlatformError::MissingPath("USERDOMAIN/USERNAME"))?;
+        let status = Command::new("icacls")
+            .arg(path.as_os_str())
+            .arg("/inheritance:r")
+            .arg("/grant:r")
+            .arg(format!("{account}:F"))
+            .arg("/grant:r")
+            .arg("*S-1-5-18:F")
+            .arg("/grant:r")
+            .arg("*S-1-5-32-544:F")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(PlatformError::InvalidData("icacls failed"))
+        }
+    }
+}
+
 fn discover_chromium_profiles(
     profiles: &mut Vec<BrowserProfile>,
     browser_name: &str,
@@ -468,6 +501,20 @@ fn first_proxy_endpoint(proxy: &str) -> Option<String> {
         })
 }
 
+fn current_user_account() -> Option<String> {
+    let username = env::var("USERNAME").ok()?.trim().to_string();
+    if username.is_empty() {
+        return None;
+    }
+    let domain = env::var("USERDOMAIN").unwrap_or_default();
+    let domain = domain.trim();
+    if domain.is_empty() {
+        Some(username)
+    } else {
+        Some(format!("{domain}\\{username}"))
+    }
+}
+
 fn wide_null(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -483,10 +530,13 @@ fn windows_error(operation: &'static str, code: WIN32_ERROR) -> PlatformError {
 mod tests {
     use super::*;
     use aiusage_platform::{
-        AppPaths, BrowserSessionDiscovery, CredentialVault, PortInspector, ProtectedData,
-        SystemProxyReader,
+        AppPaths, BrowserSessionDiscovery, CredentialVault, FilePermissionGuard, PortInspector,
+        ProtectedData, SystemProxyReader,
     };
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     #[test]
     fn derives_native_cli_config_paths() {
@@ -559,5 +609,20 @@ mod tests {
         let _ = inspector
             .owner_for_port(9)
             .expect("TCP table lookup should succeed");
+    }
+
+    #[test]
+    fn file_permission_guard_restricts_temp_file() {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after epoch")
+            .as_nanos();
+        let path = env::temp_dir().join(format!("aiusage-permission-{suffix}.txt"));
+        fs::write(&path, b"secret").expect("temp file write should succeed");
+        let guard = WindowsFilePermissionGuard;
+        guard
+            .restrict_current_user(&path)
+            .expect("icacls should restrict the temp file");
+        fs::remove_file(path).expect("restricted file should remain removable by current user");
     }
 }
