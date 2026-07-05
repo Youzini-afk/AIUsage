@@ -11,6 +11,7 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 | Install mode | NSIS per-user setup, MSI enterprise/admin install |
 | Upgrade mode | Previous signed build to current signed build |
 | User state | Clean profile, existing `%APPDATA%\AIUsage`, existing CLI configs |
+| WSL state | WSL not installed, WSL installed with at least one stopped/started distro |
 | Network | No system proxy, system proxy enabled, offline upstream |
 
 ## Preflight
@@ -31,6 +32,8 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 - Confirm WebView2 loads the app shell without a blank screen.
 - Confirm the Windows environment panel shows app paths, system proxy state, browser profile status, and default proxy port availability.
 - Confirm the Windows environment panel shows Local HTTPS CA state and does not create or trust a CA until the explicit CA action is used.
+- On a machine without WSL, confirm the Windows environment panel shows a normal WSL empty state and no app error.
+- On a machine with WSL, confirm each distro row shows the distro name plus Claude, Codex, and OpenCode target paths.
 - Confirm no unexpected console window appears during normal GUI launch.
 
 ## Tray And Lifecycle
@@ -68,6 +71,7 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 - Test OpenCode JSON and JSONC activation; confirm comments/trailing commas survive backup/restore.
 - Confirm all destructive operations show target path and backup state in UI.
 - Confirm native Windows and WSL targets are never silently mixed.
+- Confirm current native activation does not create or modify files under WSL distro homes.
 
 ## Proxy Runtime
 
@@ -134,3 +138,4 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 - Any local CA flow that creates a private key without restrictive ACLs is a release blocker.
 - Any proxy mode that loses usage accounting for normal success responses is a release blocker.
 - Any UI route that silently hides unsupported provider state is a release blocker.
+- Any WSL detection failure that breaks the Windows environment snapshot is a release blocker.

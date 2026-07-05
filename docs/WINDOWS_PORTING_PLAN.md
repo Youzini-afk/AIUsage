@@ -39,7 +39,7 @@ Completion criteria:
 Deliverables:
 
 - Windows `CredentialVault` using Credential Manager / DPAPI.
-- Windows paths service for `%APPDATA%`, `%LOCALAPPDATA%`, native CLI paths, and explicit WSL paths.
+- Windows paths service for `%APPDATA%`, `%LOCALAPPDATA%`, native CLI paths, and explicit WSL distro target paths.
 - App settings store for non-secret preferences under `%APPDATA%\AIUsage\settings.json`.
 - Browser profile discovery for Chrome, Edge, Brave, Cursor, and configurable custom profiles.
 - Windows cookie decrypt implementation.
@@ -47,7 +47,7 @@ Deliverables:
 - System proxy reader.
 - Certificate generation/trust installer. The Windows foundation now generates an AIUsage local CA, restricts private-key files, inspects CurrentUser Root trust, and trusts the CA only through an explicit user action.
 - Autostart, shell open, notifications, and log export adapters. Launch-at-login now has a Windows HKCU Run adapter wired through Tauri settings commands, the desktop shell consumes persisted tray/background lifecycle settings, and Settings can export a secret-free diagnostics metadata report.
-- Platform environment snapshot exposed through Tauri/UI for app paths, CLI paths, system proxy state, and browser profile metadata.
+- Platform environment snapshot exposed through Tauri/UI for app paths, CLI paths, WSL target discovery, system proxy state, and browser profile metadata.
 
 Completion criteria:
 
@@ -111,7 +111,7 @@ Completion criteria:
 - UI routes map to all macOS product surfaces.
 - Major workflows are covered by automated E2E tests and manual QA checklist.
 - Long-running refresh/proxy operations stream progress and errors to the UI.
-- Platform environment status is visible for Windows path/proxy/browser-profile/default-port troubleshooting.
+- Platform environment status is visible for Windows path/WSL/proxy/browser-profile/default-port troubleshooting.
 
 ### Track F: Packaging, Signing, Updates, CI
 
@@ -151,7 +151,7 @@ Completion criteria:
 | Milestone | Outcome |
 | --- | --- |
 | M1 Architecture freeze | Tauri/Rust skeleton, adapter traits, schemas, and CI baseline |
-| M2 Platform-ready app | Windows credentials, paths, tray, autostart, process/port, proxy settings, certificate trust |
+| M2 Platform-ready app | Windows credentials, native/WSL paths, tray, autostart, process/port, proxy settings, certificate trust |
 | M3 Provider parity | Provider refresh, accounts, API providers, usage normalization, archives, call analytics |
 | M4 Proxy parity | Claude/Codex/OpenCode/global proxy tracks with config takeover and accounting |
 | M5 UI parity | All product screens and tray workflows implemented |
@@ -178,6 +178,7 @@ Completion criteria:
 - Every proxy mode has streaming tests.
 - CI must reject unsigned release builds.
 - Docs and UI must distinguish native Windows from WSL targets.
+- WSL config activation must remain explicit; discovery alone must not write WSL files.
 
 ## Release Checklist
 
@@ -189,6 +190,7 @@ Completion criteria:
 - Installed app launches after fresh install and after upgrade.
 - Tray icon/menu works after reboot when autostart is enabled, including close-to-tray, restore, Open Settings, and explicit Quit.
 - Settings diagnostics export creates a metadata report without raw secrets or log bodies.
+- Settings environment view distinguishes native Windows paths from WSL distro targets.
 - Credential vault survives upgrade.
 - Proxy activation/restoration tested for Claude, Codex, OpenCode, and global proxy.
 - Logs and diagnostics can be exported.

@@ -27,10 +27,10 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | --- | --- |
 | Desktop shell | Tauri 2 + React + Rust workspace builds on Windows |
 | Contract schema | Core product surfaces, provider identities, proxy tracks, and release targets are covered by fixture tests |
-| Platform adapters | Windows app paths, Credential Manager + DPAPI vault, browser profile discovery, system proxy snapshot, TCP port owner lookup, CurrentUser Root certificate trust adapter, and sensitive-file permission tightening are implemented behind traits |
-| Platform environment UI | Tauri exposes Windows app/CLI paths, current-user WinHTTP/WinINET proxy snapshot, Chromium/Cursor browser profile discovery, local HTTPS CA state, and default proxy port preflight; the Windows UI summarizes proxy state, known paths, endpoint count, detected profiles, certificate trust state, and free/busy default ports without reading cookies |
+| Platform adapters | Windows app paths, explicit WSL distribution discovery, Credential Manager + DPAPI vault, browser profile discovery, system proxy snapshot, TCP port owner lookup, CurrentUser Root certificate trust adapter, and sensitive-file permission tightening are implemented behind traits |
+| Platform environment UI | Tauri exposes Windows app/CLI paths, WSL distro target paths, current-user WinHTTP/WinINET proxy snapshot, Chromium/Cursor browser profile discovery, local HTTPS CA state, and default proxy port preflight; the Windows UI summarizes proxy state, known paths, WSL distro count, endpoint count, detected profiles, certificate trust state, and free/busy default ports without reading cookies |
 | Config transforms | Codex `config.toml` managed blocks and OpenCode provider/model injection are implemented in `aiusage-core` |
-| Config takeover service | Claude/Codex/OpenCode native Windows paths, custom paths, sidecar `.aiusage.bak` backups, idempotent activation, restore, OpenCode JSONC parsing, and Tauri commands are implemented |
+| Config takeover service | Claude/Codex/OpenCode native Windows paths, custom paths, sidecar `.aiusage.bak` backups, idempotent activation, restore, OpenCode JSONC parsing, and Tauri commands are implemented; WSL targets are discovered but not written without a future explicit WSL activation path |
 | Proxy runtime | Async Rust passthrough supervisor starts/stops local listeners, exposes health through Tauri, validates client keys, normalizes `/v1` upstream paths, injects upstream auth, streams upstream responses, emits request/usage events, parses OpenAI/Anthropic usage shapes, and surfaces four-track health in the Windows UI |
 | Proxy port preflight | Windows Tauri layer checks requested proxy ports after stopping the same track and before binding; external owners are reported with PID/path where available, and a reusable `proxy_port_preflight` command supports custom node ports |
 | Usage archive | Proxy usage events are persisted per track under `%APPDATA%\AIUsage\usage-archive\proxy-usage-<track>-v1.json`, permission-tightened through the Windows file guard, and summarized in the Windows UI |
@@ -92,6 +92,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | Notifications | Tauri notification plugin or Windows notification integration |
 | Launch at login | HKCU Run registry adapter implemented and wired to Windows settings |
 | System proxy detection | WinHTTP/WinINET APIs |
+| WSL target discovery | `wsl.exe` distro enumeration with per-distro `$HOME`, Claude, Codex, and OpenCode target paths; absent/offline WSL is non-fatal |
 | Certificate trust | CurrentUser Root adapter implemented for AIUsage local CA; admin/local-machine trust remains an explicit enterprise flow |
 | Process lifecycle | Rust supervisor, Windows Job Objects if needed |
 | Orphan cleanup | Only AIUsage-owned helper/process instances |

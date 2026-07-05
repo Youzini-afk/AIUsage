@@ -62,6 +62,15 @@ type BrowserProfileSummary = {
   cookiesDbPath: string;
 };
 
+type WslDistributionSummary = {
+  name: string;
+  homePath: string | null;
+  claudeHome: string;
+  codexHome: string;
+  opencodeConfigDir: string;
+  errorMessage: string | null;
+};
+
 type ProxyPortOwnerSummary = {
   port: number;
   processId: number;
@@ -83,6 +92,8 @@ type PlatformEnvironmentSnapshot = {
   systemProxy: SystemProxySummary;
   browserProfiles: BrowserProfileSummary[];
   browserProfileError: string | null;
+  wslDistributions: WslDistributionSummary[];
+  wslError: string | null;
   defaultProxyPorts: ProxyPortPreflight[];
 };
 
@@ -599,15 +610,16 @@ export function App() {
   const platformPathRows = [
     { label: "App config", path: platformEnvironment?.paths.appConfigDir ?? "%APPDATA%\\AIUsage" },
     { label: "App data", path: platformEnvironment?.paths.appDataDir ?? "%LOCALAPPDATA%\\AIUsage" },
-    { label: "Claude", path: platformEnvironment?.paths.claudeHome ?? "%USERPROFILE%\\.claude" },
-    { label: "Codex", path: platformEnvironment?.paths.codexHome ?? "%USERPROFILE%\\.codex" },
+    { label: "Native Claude", path: platformEnvironment?.paths.claudeHome ?? "%USERPROFILE%\\.claude" },
+    { label: "Native Codex", path: platformEnvironment?.paths.codexHome ?? "%USERPROFILE%\\.codex" },
     {
-      label: "OpenCode",
+      label: "Native OpenCode",
       path: platformEnvironment?.paths.opencodeConfigDir ?? "%USERPROFILE%\\.config\\opencode"
     }
   ];
   const systemProxy = platformEnvironment?.systemProxy;
   const browserProfiles = platformEnvironment?.browserProfiles ?? [];
+  const wslDistributions = platformEnvironment?.wslDistributions ?? [];
   const defaultProxyPorts =
     platformEnvironment?.defaultProxyPorts ??
     ([
@@ -867,6 +879,10 @@ export function App() {
               </strong>
             </section>
             <section className="usage-meter">
+              <span>WSL distros</span>
+              <strong>{wslDistributions.length}</strong>
+            </section>
+            <section className="usage-meter">
               <span>Proxy endpoints</span>
               <strong>{[systemProxy?.http, systemProxy?.https, systemProxy?.socks].filter(Boolean).length}</strong>
             </section>
@@ -890,6 +906,40 @@ export function App() {
                 </div>
               </article>
             ))}
+            {(wslDistributions.length
+              ? wslDistributions.slice(0, 4)
+              : [
+                  {
+                    name: "Not detected",
+                    homePath: null,
+                    claudeHome: "~/.claude",
+                    codexHome: "~/.codex",
+                    opencodeConfigDir: "~/.config/opencode",
+                    errorMessage: null
+                  }
+                ]
+            ).map((distribution) => {
+              const detected = distribution.name !== "Not detected";
+              return (
+                <article key={`wsl-${distribution.name}`} className="surface-row">
+                  <div>
+                    <strong>WSL · {distribution.name}</strong>
+                    <span>
+                      Claude {distribution.claudeHome} · Codex {distribution.codexHome}
+                    </span>
+                    <span>OpenCode {distribution.opencodeConfigDir}</span>
+                    {distribution.errorMessage ? <span>{distribution.errorMessage}</span> : null}
+                  </div>
+                  <span
+                    className={`status ${
+                      distribution.errorMessage ? "blocked" : detected ? "complete" : "runtime-stopped"
+                    }`}
+                  >
+                    {distribution.errorMessage ? "Warning" : detected ? "Detected" : "None"}
+                  </span>
+                </article>
+              );
+            })}
             <article className="surface-row">
               <div>
                 <strong>System proxy</strong>
@@ -974,6 +1024,7 @@ export function App() {
           {platformEnvironment?.browserProfileError ? (
             <div className="settings-error">{platformEnvironment.browserProfileError}</div>
           ) : null}
+          {platformEnvironment?.wslError ? <div className="settings-error">{platformEnvironment.wslError}</div> : null}
         </section>
 
         <section className="panel">

@@ -153,6 +153,37 @@ Typical native paths:
 
 If a restore fails, stop all related CLIs, copy the `.aiusage.bak` file back to the original path, then retry AIUsage restore.
 
+## WSL And Native Targets
+
+The Windows environment panel separates native Windows paths from WSL distro paths. Native activation should not create or modify files inside WSL distro homes.
+
+Check detected distros:
+
+```powershell
+wsl.exe --list --quiet
+```
+
+Check a distro home path:
+
+```powershell
+wsl.exe -d <DISTRO_NAME> sh -lc 'printf %s "$HOME"'
+```
+
+Expected WSL target paths use the distro home:
+
+```text
+$HOME/.claude
+$HOME/.codex
+$HOME/.config/opencode
+```
+
+If AIUsage shows a WSL warning:
+
+- Confirm the distro starts outside AIUsage.
+- Confirm `wsl.exe` is available on `PATH`.
+- Confirm the distro has a POSIX shell at `sh`.
+- Treat WSL as unavailable until the warning is resolved; native Windows paths remain usable.
+
 ## Call Analytics Empty Or Partial
 
 Check the Windows environment panel and diagnostics export for source paths.

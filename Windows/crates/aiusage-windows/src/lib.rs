@@ -10,7 +10,8 @@ use aiusage_core::CredentialKind;
 use aiusage_platform::{
     AppPaths, AutostartManager, BrowserProfile, BrowserSessionDiscovery, CertificateTrustStore,
     CredentialVault, FilePermissionGuard, PlatformError, PlatformResult, PortInspector, PortOwner,
-    ProtectedData, SystemProxyReader, SystemProxySnapshot,
+    ProtectedData, SystemProxyReader, SystemProxySnapshot, WslDistribution,
+    WslDistributionDiscovery,
 };
 use windows::{
     core::{PCWSTR, PWSTR},
@@ -306,6 +307,33 @@ impl SystemProxyReader for WindowsSystemProxyReader {
         }
 
         Ok(snapshot)
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct WindowsWslDistributionDiscovery;
+
+impl WslDistributionDiscovery for WindowsWslDistributionDiscovery {
+    fn distributions(&self) -> PlatformResult<Vec<WslDistribution>> {
+        let output = match Command::new("wsl.exe").args(["--list", "--quiet"]).output() {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+
+        let text = decode_command_output(&output.stdout);
+        let names = text
+            .lines()
+            .map(|line| line.trim().trim_start_matches('*').trim())
+            .filter(|line| !line.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+
+        Ok(names.into_iter().map(wsl_distribution_summary).collect())
     }
 }
 
@@ -803,6 +831,66 @@ fn first_proxy_endpoint(proxy: &str) -> Option<String> {
         })
 }
 
+fn wsl_distribution_summary(name: String) -> WslDistribution {
+    match wsl_home_for_distribution(&name) {
+        Ok(home) => wsl_distribution_with_home(name, Some(home), None),
+        Err(error) => wsl_distribution_with_home(name, None, Some(error.to_string())),
+    }
+}
+
+fn wsl_distribution_with_home(
+    name: String,
+    home_path: Option<String>,
+    error_message: Option<String>,
+) -> WslDistribution {
+    let base = home_path.as_deref().unwrap_or("~").to_string();
+    WslDistribution {
+        name,
+        home_path,
+        claude_home: format!("{base}/.claude"),
+        codex_home: format!("{base}/.codex"),
+        opencode_config_dir: format!("{base}/.config/opencode"),
+        error_message,
+    }
+}
+
+fn wsl_home_for_distribution(name: &str) -> PlatformResult<String> {
+    let output = Command::new("wsl.exe")
+        .args(["-d", name, "sh", "-lc", "printf %s \"$HOME\""])
+        .output()?;
+    if !output.status.success() {
+        return Err(PlatformError::InvalidData("wsl home lookup failed"));
+    }
+    let home = decode_command_output(&output.stdout).trim().to_string();
+    if home.is_empty() {
+        return Err(PlatformError::MissingPath("WSL_HOME"));
+    }
+    Ok(home)
+}
+
+fn decode_command_output(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        decode_utf16_lossy(&bytes[2..], u16::from_le_bytes)
+    } else if bytes.starts_with(&[0xFE, 0xFF]) {
+        decode_utf16_lossy(&bytes[2..], u16::from_be_bytes)
+    } else if bytes.len() >= 2
+        && bytes.len() % 2 == 0
+        && (bytes.contains(&0) || std::str::from_utf8(bytes).is_err())
+    {
+        decode_utf16_lossy(bytes, u16::from_le_bytes)
+    } else {
+        String::from_utf8_lossy(bytes).replace('\0', "")
+    }
+}
+
+fn decode_utf16_lossy(bytes: &[u8], decode_word: fn([u8; 2]) -> u16) -> String {
+    let words = bytes
+        .chunks_exact(2)
+        .map(|chunk| decode_word([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16_lossy(&words).replace('\0', "")
+}
+
 fn current_user_account() -> Option<String> {
     let username = env::var("USERNAME").ok()?.trim().to_string();
     if username.is_empty() {
@@ -903,6 +991,30 @@ mod tests {
             .current_proxy()
             .expect("system proxy API should return a snapshot");
         let _ = snapshot.is_any_enabled();
+    }
+
+    #[test]
+    fn wsl_distribution_without_home_uses_tilde_paths() {
+        let distribution =
+            wsl_distribution_with_home("Ubuntu".to_string(), None, Some("offline".to_string()));
+        assert_eq!(distribution.claude_home, "~/.claude");
+        assert_eq!(distribution.codex_home, "~/.codex");
+        assert_eq!(distribution.opencode_config_dir, "~/.config/opencode");
+        assert_eq!(distribution.error_message.as_deref(), Some("offline"));
+    }
+
+    #[test]
+    fn wsl_output_decoder_accepts_utf16le() {
+        let bytes = "Ubuntu\r\nDebian\r\n"
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect::<Vec<_>>();
+        assert_eq!(decode_command_output(&bytes), "Ubuntu\r\nDebian\r\n");
+    }
+
+    #[test]
+    fn wsl_output_decoder_accepts_utf8() {
+        assert_eq!(decode_command_output("Ubuntu\n".as_bytes()), "Ubuntu\n");
     }
 
     #[test]

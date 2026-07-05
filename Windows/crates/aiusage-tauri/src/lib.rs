@@ -1,6 +1,7 @@
 use aiusage_core::phase_a_snapshot;
 use aiusage_platform::{
     AppPaths, BrowserSessionDiscovery, PortInspector, PortOwner, SystemProxyReader,
+    WslDistributionDiscovery,
 };
 use aiusage_proxy::{ProxyError, ProxyRuntimeEvent, ProxySupervisor};
 use aiusage_services::{
@@ -10,7 +11,7 @@ use aiusage_services::{
 use aiusage_windows::{
     WindowsAppPaths, WindowsAutostartManager, WindowsBrowserDiscovery,
     WindowsCertificateTrustStore, WindowsCredentialVault, WindowsFilePermissionGuard,
-    WindowsPortInspector, WindowsSystemProxyReader,
+    WindowsPortInspector, WindowsSystemProxyReader, WindowsWslDistributionDiscovery,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -63,6 +64,17 @@ pub struct BrowserProfileSummary {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WslDistributionSummary {
+    pub name: String,
+    pub home_path: Option<String>,
+    pub claude_home: String,
+    pub codex_home: String,
+    pub opencode_config_dir: String,
+    pub error_message: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProxyPortOwnerSummary {
     pub port: u16,
     pub process_id: u32,
@@ -88,6 +100,8 @@ pub struct PlatformEnvironmentSnapshot {
     pub system_proxy: SystemProxySummary,
     pub browser_profiles: Vec<BrowserProfileSummary>,
     pub browser_profile_error: Option<String>,
+    pub wsl_distributions: Vec<WslDistributionSummary>,
+    pub wsl_error: Option<String>,
     pub default_proxy_ports: Vec<ProxyPortPreflight>,
 }
 
@@ -139,12 +153,33 @@ pub fn platform_environment() -> PlatformEnvironmentSnapshot {
         Err(error) => (Vec::new(), Some(error.to_string())),
     };
 
+    let wsl_discovery = WindowsWslDistributionDiscovery;
+    let (wsl_distributions, wsl_error) = match wsl_discovery.distributions() {
+        Ok(distributions) => (
+            distributions
+                .into_iter()
+                .map(|distribution| WslDistributionSummary {
+                    name: distribution.name,
+                    home_path: distribution.home_path,
+                    claude_home: distribution.claude_home,
+                    codex_home: distribution.codex_home,
+                    opencode_config_dir: distribution.opencode_config_dir,
+                    error_message: distribution.error_message,
+                })
+                .collect(),
+            None,
+        ),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+
     PlatformEnvironmentSnapshot {
         generated_at_epoch_ms: epoch_ms(),
         paths: desktop_path_snapshot(&paths),
         system_proxy,
         browser_profiles,
         browser_profile_error,
+        wsl_distributions,
+        wsl_error,
         default_proxy_ports: default_proxy_port_preflights(),
     }
 }
@@ -462,6 +497,8 @@ mod tests {
         let snapshot = platform_environment();
         assert!(snapshot.paths.app_config_dir.is_some());
         let _ = snapshot.system_proxy.any_enabled;
+        let _ = snapshot.wsl_distributions;
+        let _ = snapshot.wsl_error;
         assert_eq!(snapshot.default_proxy_ports.len(), 4);
     }
 

@@ -46,6 +46,16 @@ impl SystemProxySnapshot {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WslDistribution {
+    pub name: String,
+    pub home_path: Option<String>,
+    pub claude_home: String,
+    pub codex_home: String,
+    pub opencode_config_dir: String,
+    pub error_message: Option<String>,
+}
+
 pub trait AppPaths {
     fn user_home(&self) -> PlatformResult<PathBuf>;
     fn app_config_dir(&self) -> PlatformResult<PathBuf>;
@@ -78,6 +88,10 @@ pub trait PortInspector {
 
 pub trait SystemProxyReader {
     fn current_proxy(&self) -> PlatformResult<SystemProxySnapshot>;
+}
+
+pub trait WslDistributionDiscovery {
+    fn distributions(&self) -> PlatformResult<Vec<WslDistribution>>;
 }
 
 pub trait FilePermissionGuard {
