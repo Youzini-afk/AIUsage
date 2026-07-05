@@ -14,13 +14,18 @@ use aiusage_core::{
     ClaudeManagedSettings, CodexManagedConfig, CredentialKind, OpenCodeManagedNode,
 };
 use aiusage_platform::{
-    AppPaths, AutostartManager, CredentialVault, FilePermissionGuard, PlatformError, PlatformResult,
+    AppPaths, AutostartManager, CertificateTrustStore, CredentialVault, FilePermissionGuard,
+    PlatformError, PlatformResult,
 };
 use aiusage_proxy::ProxyUsage;
 use chrono::{DateTime, Local, Utc};
+use rcgen::{
+    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, KeyUsagePurpose,
+};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -35,6 +40,8 @@ pub enum ServiceError {
     NonUtf8Path(PathBuf),
     #[error("managed config request is invalid: {0}")]
     InvalidRequest(&'static str),
+    #[error("certificate generation failed: {0}")]
+    Certificate(String),
 }
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
@@ -42,6 +49,7 @@ pub type ServiceResult<T> = Result<T, ServiceError>;
 pub const PROXY_USAGE_ARCHIVE_VERSION: u32 = 1;
 pub const APP_SETTINGS_VERSION: u32 = 1;
 pub const DIAGNOSTICS_EXPORT_VERSION: u32 = 1;
+pub const LOCAL_CERTIFICATE_AUTHORITY_VERSION: u32 = 1;
 const DIAGNOSTICS_FILE_SCAN_LIMIT: usize = 5_000;
 const DIAGNOSTICS_RECENT_FILE_LIMIT: usize = 25;
 
@@ -63,6 +71,19 @@ impl AutostartManager for NoopAutostartManager {
     }
 
     fn set_enabled(&self, _enabled: bool) -> PlatformResult<()> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct NoopCertificateTrustStore;
+
+impl CertificateTrustStore for NoopCertificateTrustStore {
+    fn is_certificate_trusted(&self, _sha256_thumbprint: &str) -> PlatformResult<bool> {
+        Ok(false)
+    }
+
+    fn trust_certificate_der(&self, _certificate_der: &[u8]) -> PlatformResult<()> {
         Ok(())
     }
 }
@@ -175,6 +196,22 @@ pub struct DiagnosticsExportSnapshot {
     pub export_path: String,
     pub paths: Vec<DiagnosticsPathSummary>,
     pub recent_files: Vec<DiagnosticsFileSummary>,
+    pub warning_messages: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalCertificateAuthoritySnapshot {
+    pub version: u32,
+    pub generated_at_epoch_ms: u128,
+    pub certificate_dir: String,
+    pub certificate_der_path: String,
+    pub certificate_pem_path: String,
+    pub private_key_path: String,
+    pub certificate_exists: bool,
+    pub private_key_exists: bool,
+    pub sha256_thumbprint: Option<String>,
+    pub trusted_current_user_root: bool,
     pub warning_messages: Vec<String>,
 }
 
@@ -611,6 +648,167 @@ where
             .map_err(ServiceError::Platform)?;
         Ok(snapshot)
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct LocalCertificateAuthorityService<
+    P,
+    G = NoopFilePermissionGuard,
+    T = NoopCertificateTrustStore,
+> {
+    paths: P,
+    permissions: G,
+    trust_store: T,
+}
+
+impl<P> LocalCertificateAuthorityService<P, NoopFilePermissionGuard, NoopCertificateTrustStore>
+where
+    P: AppPaths,
+{
+    pub fn new(paths: P) -> Self {
+        Self {
+            paths,
+            permissions: NoopFilePermissionGuard,
+            trust_store: NoopCertificateTrustStore,
+        }
+    }
+}
+
+impl<P, G, T> LocalCertificateAuthorityService<P, G, T>
+where
+    P: AppPaths,
+    G: FilePermissionGuard,
+    T: CertificateTrustStore,
+{
+    pub fn with_platform(paths: P, permissions: G, trust_store: T) -> Self {
+        Self {
+            paths,
+            permissions,
+            trust_store,
+        }
+    }
+
+    pub fn snapshot(&self) -> ServiceResult<LocalCertificateAuthoritySnapshot> {
+        self.snapshot_for_paths(&self.certificate_paths()?)
+    }
+
+    pub fn ensure(&self) -> ServiceResult<LocalCertificateAuthoritySnapshot> {
+        let paths = self.certificate_paths()?;
+        if !paths.certificate_der_path.exists() || !paths.private_key_path.exists() {
+            self.generate_local_ca(&paths)?;
+        }
+        self.snapshot_for_paths(&paths)
+    }
+
+    pub fn trust_current_user_root(&self) -> ServiceResult<LocalCertificateAuthoritySnapshot> {
+        let paths = self.certificate_paths()?;
+        if !paths.certificate_der_path.exists() || !paths.private_key_path.exists() {
+            self.generate_local_ca(&paths)?;
+        }
+        let certificate_der = fs::read(&paths.certificate_der_path)?;
+        self.trust_store.trust_certificate_der(&certificate_der)?;
+        self.snapshot_for_paths(&paths)
+    }
+
+    fn certificate_paths(&self) -> ServiceResult<LocalCertificateAuthorityPaths> {
+        let certificate_dir = self.paths.app_config_dir()?.join("certificates");
+        Ok(LocalCertificateAuthorityPaths {
+            certificate_der_path: certificate_dir.join("aiusage-local-root-ca.der"),
+            certificate_pem_path: certificate_dir.join("aiusage-local-root-ca.pem"),
+            private_key_path: certificate_dir.join("aiusage-local-root-ca-key.pem"),
+            certificate_dir,
+        })
+    }
+
+    fn generate_local_ca(&self, paths: &LocalCertificateAuthorityPaths) -> ServiceResult<()> {
+        fs::create_dir_all(&paths.certificate_dir)?;
+
+        let key_pair =
+            KeyPair::generate().map_err(|error| ServiceError::Certificate(error.to_string()))?;
+        let mut distinguished_name = DistinguishedName::new();
+        distinguished_name.push(DnType::CommonName, "AIUsage Local Proxy Root CA");
+
+        let mut params = CertificateParams::new(vec!["AIUsage Local Proxy Root CA".to_string()])
+            .map_err(|error| ServiceError::Certificate(error.to_string()))?;
+        params.distinguished_name = distinguished_name;
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params.key_usages = vec![
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+            KeyUsagePurpose::DigitalSignature,
+        ];
+
+        let certificate = params
+            .self_signed(&key_pair)
+            .map_err(|error| ServiceError::Certificate(error.to_string()))?;
+        write_bytes_atomically(&paths.certificate_der_path, certificate.der().as_ref())?;
+        write_text_atomically(&paths.certificate_pem_path, &certificate.pem())?;
+        write_text_atomically(&paths.private_key_path, &key_pair.serialize_pem())?;
+
+        self.permissions
+            .restrict_current_user(&paths.certificate_der_path)?;
+        self.permissions
+            .restrict_current_user(&paths.certificate_pem_path)?;
+        self.permissions
+            .restrict_current_user(&paths.private_key_path)?;
+        Ok(())
+    }
+
+    fn snapshot_for_paths(
+        &self,
+        paths: &LocalCertificateAuthorityPaths,
+    ) -> ServiceResult<LocalCertificateAuthoritySnapshot> {
+        let certificate_exists = paths.certificate_der_path.exists();
+        let private_key_exists = paths.private_key_path.exists();
+        let mut warning_messages = Vec::new();
+
+        let sha256_thumbprint = if certificate_exists {
+            let certificate_der = fs::read(&paths.certificate_der_path)?;
+            Some(sha256_thumbprint(&certificate_der))
+        } else {
+            None
+        };
+
+        if certificate_exists && !private_key_exists {
+            warning_messages.push("Certificate exists but private key is missing".to_string());
+        }
+        if private_key_exists && !certificate_exists {
+            warning_messages.push("Private key exists but certificate is missing".to_string());
+        }
+
+        let trusted_current_user_root = match sha256_thumbprint.as_deref() {
+            Some(thumbprint) => match self.trust_store.is_certificate_trusted(thumbprint) {
+                Ok(trusted) => trusted,
+                Err(error) => {
+                    warning_messages.push(format!("Could not inspect CurrentUser Root: {error}"));
+                    false
+                }
+            },
+            None => false,
+        };
+
+        Ok(LocalCertificateAuthoritySnapshot {
+            version: LOCAL_CERTIFICATE_AUTHORITY_VERSION,
+            generated_at_epoch_ms: epoch_ms(),
+            certificate_dir: display_path(&paths.certificate_dir)?,
+            certificate_der_path: display_path(&paths.certificate_der_path)?,
+            certificate_pem_path: display_path(&paths.certificate_pem_path)?,
+            private_key_path: display_path(&paths.private_key_path)?,
+            certificate_exists,
+            private_key_exists,
+            sha256_thumbprint,
+            trusted_current_user_root,
+            warning_messages,
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct LocalCertificateAuthorityPaths {
+    certificate_dir: PathBuf,
+    certificate_der_path: PathBuf,
+    certificate_pem_path: PathBuf,
+    private_key_path: PathBuf,
 }
 
 impl<V> CredentialRegistry<V>
@@ -3204,6 +3402,14 @@ fn display_path(path: &Path) -> ServiceResult<String> {
         .ok_or_else(|| ServiceError::NonUtf8Path(path.to_path_buf()))
 }
 
+fn sha256_thumbprint(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 fn archive_track_slug(track: &aiusage_core::ProxyTrack) -> &'static str {
     match track {
         aiusage_core::ProxyTrack::ClaudeCode => "claude",
@@ -3224,7 +3430,7 @@ fn epoch_ms() -> u128 {
 mod tests {
     use super::*;
     use aiusage_core::OpenCodeManagedModel;
-    use aiusage_platform::{CredentialVault, PlatformResult};
+    use aiusage_platform::{CertificateTrustStore, CredentialVault, PlatformResult};
     use aiusage_proxy::{ProxyProtocol, ProxyUsage};
     use serde_json::json;
     use std::sync::{Arc, Mutex};
@@ -3312,6 +3518,29 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug, Default)]
+    struct MemoryCertificateTrustStore {
+        trusted: Arc<Mutex<BTreeSet<String>>>,
+    }
+
+    impl CertificateTrustStore for MemoryCertificateTrustStore {
+        fn is_certificate_trusted(&self, sha256_thumbprint: &str) -> PlatformResult<bool> {
+            Ok(self
+                .trusted
+                .lock()
+                .expect("trust lock")
+                .contains(sha256_thumbprint))
+        }
+
+        fn trust_certificate_der(&self, certificate_der: &[u8]) -> PlatformResult<()> {
+            self.trusted
+                .lock()
+                .expect("trust lock")
+                .insert(sha256_thumbprint(certificate_der));
+            Ok(())
+        }
+    }
+
     #[test]
     fn app_settings_persist_and_sync_autostart() {
         let temp = TempDir::new().expect("tempdir");
@@ -3390,6 +3619,35 @@ mod tests {
         let report = fs::read_to_string(&snapshot.export_path).expect("diagnostics report");
         assert!(report.contains("aiusage.log"));
         assert!(!report.contains("SHOULD_NOT_APPEAR_IN_DIAGNOSTICS"));
+    }
+
+    #[test]
+    fn local_certificate_authority_generates_and_tracks_trust() {
+        let temp = TempDir::new().expect("tempdir");
+        let trust_store = MemoryCertificateTrustStore::default();
+        let service = LocalCertificateAuthorityService::with_platform(
+            TestPaths::new(temp.path().to_path_buf()),
+            NoopFilePermissionGuard,
+            trust_store,
+        );
+
+        let initial = service.snapshot().expect("initial ca snapshot");
+        assert!(!initial.certificate_exists);
+        assert!(!initial.private_key_exists);
+        assert!(!initial.trusted_current_user_root);
+
+        let prepared = service.ensure().expect("generated local ca");
+        assert!(prepared.certificate_exists);
+        assert!(prepared.private_key_exists);
+        assert!(prepared.sha256_thumbprint.is_some());
+        assert!(!prepared.trusted_current_user_root);
+        assert!(Path::new(&prepared.certificate_der_path).exists());
+        assert!(Path::new(&prepared.certificate_pem_path).exists());
+        assert!(Path::new(&prepared.private_key_path).exists());
+
+        let trusted = service.trust_current_user_root().expect("trust local ca");
+        assert_eq!(trusted.sha256_thumbprint, prepared.sha256_thumbprint);
+        assert!(trusted.trusted_current_user_root);
     }
 
     #[test]

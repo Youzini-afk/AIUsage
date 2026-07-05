@@ -30,6 +30,7 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 - Launch AIUsage from Start Menu and installed binary path.
 - Confirm WebView2 loads the app shell without a blank screen.
 - Confirm the Windows environment panel shows app paths, system proxy state, browser profile status, and default proxy port availability.
+- Confirm the Windows environment panel shows Local HTTPS CA state and does not create or trust a CA until the explicit CA action is used.
 - Confirm no unexpected console window appears during normal GUI launch.
 
 ## Tray And Lifecycle
@@ -79,6 +80,15 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 - Attempt to start a proxy on the occupied port and confirm the error names the owner instead of only showing a bind failure.
 - Stop each proxy track and confirm only AIUsage-owned listeners are stopped.
 
+## Local HTTPS CA
+
+- Use `Prepare CA` and confirm AIUsage creates certificate files under `%APPDATA%\AIUsage\certificates`.
+- Confirm `aiusage-local-root-ca-key.pem` is ACL-restricted to the current user, SYSTEM, and Administrators.
+- Confirm the UI shows a SHA-256 thumbprint after preparation.
+- Use `Trust CA` and confirm the certificate appears in `Cert:\CurrentUser\Root`.
+- Confirm `Trust CA` is disabled after the CurrentUser Root trust check succeeds.
+- Confirm diagnostics export never includes private-key contents.
+
 ## Usage And Call Analytics
 
 - Generate proxy usage and confirm `%APPDATA%\AIUsage\usage-archive\proxy-usage-<track>-v1.json` updates.
@@ -121,5 +131,6 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 - Any tray `Quit` action that leaves the app running is a release blocker.
 - Any installer that cannot upgrade without losing credentials/settings is a release blocker.
 - Any updater-enabled release missing `.sig` files or a valid `latest.json` is a release blocker.
+- Any local CA flow that creates a private key without restrictive ACLs is a release blocker.
 - Any proxy mode that loses usage accounting for normal success responses is a release blocker.
 - Any UI route that silently hides unsupported provider state is a release blocker.

@@ -45,7 +45,7 @@ Deliverables:
 - Windows cookie decrypt implementation.
 - Process/port inspector using Windows APIs.
 - System proxy reader.
-- Certificate generation/trust installer.
+- Certificate generation/trust installer. The Windows foundation now generates an AIUsage local CA, restricts private-key files, inspects CurrentUser Root trust, and trusts the CA only through an explicit user action.
 - Autostart, shell open, notifications, and log export adapters. Launch-at-login now has a Windows HKCU Run adapter wired through Tauri settings commands, the desktop shell consumes persisted tray/background lifecycle settings, and Settings can export a secret-free diagnostics metadata report.
 - Platform environment snapshot exposed through Tauri/UI for app paths, CLI paths, system proxy state, and browser profile metadata.
 

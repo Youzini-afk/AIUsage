@@ -86,6 +86,38 @@ Invoke-RestMethod http://127.0.0.1:14399/health
 
 Use the track's actual port.
 
+## Local HTTPS CA Issues
+
+AIUsage stores local proxy CA material under:
+
+```text
+%APPDATA%\AIUsage\certificates
+```
+
+Expected files after `Prepare CA`:
+
+```text
+aiusage-local-root-ca.der
+aiusage-local-root-ca.pem
+aiusage-local-root-ca-key.pem
+```
+
+Check CurrentUser Root trust:
+
+```powershell
+Get-ChildItem Cert:\CurrentUser\Root | Where-Object Thumbprint -eq "<SHA256_THUMBPRINT>"
+```
+
+If trust fails:
+
+- Confirm the UI shows the certificate thumbprint.
+- Confirm enterprise policy allows current-user root certificates.
+- Confirm the private key file is not shared in bug reports.
+- Re-run `Prepare CA` only if the certificate or private key is missing.
+- Use `Trust CA` again after policy or permission issues are resolved.
+
+Do not manually import the private key into Windows Root. Only the public certificate should be trusted.
+
 ## Credential Manager Issues
 
 AIUsage stores provider credentials in Windows Credential Manager / DPAPI-backed vault data.

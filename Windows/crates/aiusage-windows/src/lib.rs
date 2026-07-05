@@ -8,9 +8,9 @@ use std::{
 
 use aiusage_core::CredentialKind;
 use aiusage_platform::{
-    AppPaths, AutostartManager, BrowserProfile, BrowserSessionDiscovery, CredentialVault,
-    FilePermissionGuard, PlatformError, PlatformResult, PortInspector, PortOwner, ProtectedData,
-    SystemProxyReader, SystemProxySnapshot,
+    AppPaths, AutostartManager, BrowserProfile, BrowserSessionDiscovery, CertificateTrustStore,
+    CredentialVault, FilePermissionGuard, PlatformError, PlatformResult, PortInspector, PortOwner,
+    ProtectedData, SystemProxyReader, SystemProxySnapshot,
 };
 use windows::{
     core::{PCWSTR, PWSTR},
@@ -35,7 +35,13 @@ use windows::{
                 CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
             },
             Cryptography::{
-                CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+                sz_CERT_STORE_PROV_SYSTEM_W, CertAddEncodedCertificateToStore, CertCloseStore,
+                CertEnumCertificatesInStore, CertFreeCertificateContext,
+                CertGetCertificateContextProperty, CertOpenStore, CryptProtectData,
+                CryptUnprotectData, CERT_CONTEXT, CERT_OPEN_STORE_FLAGS, CERT_SHA256_HASH_PROP_ID,
+                CERT_STORE_ADD_REPLACE_EXISTING, CERT_STORE_OPEN_EXISTING_FLAG,
+                CERT_STORE_READONLY_FLAG, CERT_SYSTEM_STORE_CURRENT_USER,
+                CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB, HCERTSTORE, X509_ASN_ENCODING,
             },
         },
         System::Registry::{
@@ -457,6 +463,58 @@ impl FilePermissionGuard for WindowsFilePermissionGuard {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct WindowsCertificateTrustStore;
+
+impl CertificateTrustStore for WindowsCertificateTrustStore {
+    fn is_certificate_trusted(&self, sha256_thumbprint: &str) -> PlatformResult<bool> {
+        let expected = normalize_thumbprint(sha256_thumbprint);
+        if expected.is_empty() {
+            return Ok(false);
+        }
+
+        let store = open_current_user_root_store(true)?;
+        let mut previous: Option<*const CERT_CONTEXT> = None;
+        loop {
+            let context = unsafe { CertEnumCertificatesInStore(store.0, previous) };
+            if context.is_null() {
+                return Ok(false);
+            }
+
+            let current_thumbprint = certificate_context_sha256_thumbprint(context)?;
+            if current_thumbprint == expected {
+                unsafe {
+                    let _ = CertFreeCertificateContext(Some(context));
+                }
+                return Ok(true);
+            }
+
+            previous = Some(context);
+        }
+    }
+
+    fn trust_certificate_der(&self, certificate_der: &[u8]) -> PlatformResult<()> {
+        if certificate_der.is_empty() {
+            return Err(PlatformError::InvalidData("empty certificate DER"));
+        }
+        let store = open_current_user_root_store(false)?;
+        unsafe {
+            CertAddEncodedCertificateToStore(
+                Some(store.0),
+                X509_ASN_ENCODING,
+                certificate_der,
+                CERT_STORE_ADD_REPLACE_EXISTING,
+                None,
+            )
+        }
+        .map_err(|_| {
+            windows_error("CertAddEncodedCertificateToStore", unsafe {
+                GetLastError()
+            })
+        })
+    }
+}
+
 fn discover_chromium_profiles(
     profiles: &mut Vec<BrowserProfile>,
     browser_name: &str,
@@ -543,6 +601,85 @@ impl RegistryKey {
             let _ = RegCloseKey(self.0);
         }
     }
+}
+
+struct CertificateStoreHandle(HCERTSTORE);
+
+impl Drop for CertificateStoreHandle {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = CertCloseStore(Some(self.0), 0);
+        }
+    }
+}
+
+fn open_current_user_root_store(readonly: bool) -> PlatformResult<CertificateStoreHandle> {
+    let store_name = wide_null("ROOT");
+    let mut flags = CERT_SYSTEM_STORE_CURRENT_USER | CERT_STORE_OPEN_EXISTING_FLAG.0;
+    if readonly {
+        flags |= CERT_STORE_READONLY_FLAG.0;
+    }
+
+    let store = unsafe {
+        CertOpenStore(
+            sz_CERT_STORE_PROV_SYSTEM_W,
+            X509_ASN_ENCODING,
+            None,
+            CERT_OPEN_STORE_FLAGS(flags),
+            Some(store_name.as_ptr().cast::<c_void>()),
+        )
+    }
+    .map_err(|_| windows_error("CertOpenStore(CurrentUser ROOT)", unsafe { GetLastError() }))?;
+
+    Ok(CertificateStoreHandle(store))
+}
+
+fn certificate_context_sha256_thumbprint(context: *const CERT_CONTEXT) -> PlatformResult<String> {
+    let mut byte_len = 0_u32;
+    unsafe {
+        CertGetCertificateContextProperty(context, CERT_SHA256_HASH_PROP_ID, None, &mut byte_len)
+    }
+    .map_err(|_| {
+        windows_error("CertGetCertificateContextProperty(size)", unsafe {
+            GetLastError()
+        })
+    })?;
+    if byte_len == 0 {
+        return Err(PlatformError::InvalidData("empty certificate thumbprint"));
+    }
+
+    let mut bytes = vec![0_u8; byte_len as usize];
+    unsafe {
+        CertGetCertificateContextProperty(
+            context,
+            CERT_SHA256_HASH_PROP_ID,
+            Some(bytes.as_mut_ptr().cast::<c_void>()),
+            &mut byte_len,
+        )
+    }
+    .map_err(|_| {
+        windows_error("CertGetCertificateContextProperty(data)", unsafe {
+            GetLastError()
+        })
+    })?;
+    bytes.truncate(byte_len as usize);
+    Ok(hex_upper(&bytes))
+}
+
+fn normalize_thumbprint(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_hexdigit())
+        .map(|character| character.to_ascii_uppercase())
+        .collect()
+}
+
+fn hex_upper(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 fn open_run_key(
@@ -789,6 +926,11 @@ mod tests {
             .restrict_current_user(&path)
             .expect("icacls should restrict the temp file");
         fs::remove_file(path).expect("restricted file should remain removable by current user");
+    }
+
+    #[test]
+    fn certificate_thumbprint_normalization_accepts_common_formats() {
+        assert_eq!(normalize_thumbprint("ab cd:12-ef"), "ABCD12EF".to_string());
     }
 
     #[test]

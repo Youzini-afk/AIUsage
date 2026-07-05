@@ -331,6 +331,16 @@ nav {
   margin-top: 10px;
 }
 
+.certificate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.certificate-row span {
+  overflow-wrap: anywhere;
+}
+
 .primary-action {
   border-color: #0f766e;
   background: #0f766e;

@@ -5,11 +5,12 @@ use aiusage_platform::{
 use aiusage_proxy::{ProxyError, ProxyRuntimeEvent, ProxySupervisor};
 use aiusage_services::{
     AppSettingsService, CallAnalyticsInventoryService, CallAnalyticsService, CredentialRegistry,
-    DiagnosticsExportService, ManagedConfigService, ServiceError,
+    DiagnosticsExportService, LocalCertificateAuthorityService, ManagedConfigService, ServiceError,
 };
 use aiusage_windows::{
-    WindowsAppPaths, WindowsAutostartManager, WindowsBrowserDiscovery, WindowsCredentialVault,
-    WindowsFilePermissionGuard, WindowsPortInspector, WindowsSystemProxyReader,
+    WindowsAppPaths, WindowsAutostartManager, WindowsBrowserDiscovery,
+    WindowsCertificateTrustStore, WindowsCredentialVault, WindowsFilePermissionGuard,
+    WindowsPortInspector, WindowsSystemProxyReader,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -19,9 +20,9 @@ pub use aiusage_proxy::{ProxyHealth, ProxyProtocol, ProxyRuntimeConfig, ProxyRun
 pub use aiusage_services::{
     AppLanguage, AppSettingsDocument, AppSettingsSnapshot, CallAnalyticsInventorySnapshot,
     CallAnalyticsSnapshot, ClaudeActivationRequest, CodexActivationRequest, CredentialSummary,
-    DiagnosticsExportSnapshot, ManagedConfigKind, ManagedConfigStatus, ManagedConfigTargetKind,
-    OpenCodeActivationRequest, ProxyUsageArchiveSummary, ProxyUsageStats, ThemeMode,
-    UpsertCredentialRequest,
+    DiagnosticsExportSnapshot, LocalCertificateAuthoritySnapshot, ManagedConfigKind,
+    ManagedConfigStatus, ManagedConfigTargetKind, OpenCodeActivationRequest,
+    ProxyUsageArchiveSummary, ProxyUsageStats, ThemeMode, UpsertCredentialRequest,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -208,6 +209,21 @@ pub fn export_diagnostics() -> Result<DiagnosticsExportSnapshot, ServiceError> {
         .export()
 }
 
+pub fn local_certificate_authority_status(
+) -> Result<LocalCertificateAuthoritySnapshot, ServiceError> {
+    local_certificate_authority_service().snapshot()
+}
+
+pub fn ensure_local_certificate_authority(
+) -> Result<LocalCertificateAuthoritySnapshot, ServiceError> {
+    local_certificate_authority_service().ensure()
+}
+
+pub fn trust_local_certificate_authority() -> Result<LocalCertificateAuthoritySnapshot, ServiceError>
+{
+    local_certificate_authority_service().trust_current_user_root()
+}
+
 pub fn proxy_port_preflight(track: ProxyTrack, bind_host: String, port: u16) -> ProxyPortPreflight {
     let inspector = WindowsPortInspector;
     proxy_port_preflight_with_inspector(&inspector, track, bind_host, port)
@@ -312,6 +328,18 @@ fn credential_registry() -> CredentialRegistry<WindowsCredentialVault> {
 
 fn app_settings_service() -> AppSettingsService<WindowsAppPaths, WindowsAutostartManager> {
     AppSettingsService::with_autostart(WindowsAppPaths::new(), WindowsAutostartManager::default())
+}
+
+fn local_certificate_authority_service() -> LocalCertificateAuthorityService<
+    WindowsAppPaths,
+    WindowsFilePermissionGuard,
+    WindowsCertificateTrustStore,
+> {
+    LocalCertificateAuthorityService::with_platform(
+        WindowsAppPaths::new(),
+        WindowsFilePermissionGuard,
+        WindowsCertificateTrustStore,
+    )
 }
 
 fn default_proxy_port_preflights() -> Vec<ProxyPortPreflight> {

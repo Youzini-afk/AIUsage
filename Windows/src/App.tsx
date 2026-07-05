@@ -17,6 +17,7 @@ import {
   RefreshCw,
   Settings,
   ServerCog,
+  ShieldCheck,
   TerminalSquare
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -222,6 +223,20 @@ type DiagnosticsExportSnapshot = {
   warningMessages: string[];
 };
 
+type LocalCertificateAuthoritySnapshot = {
+  version: number;
+  generatedAtEpochMs: number;
+  certificateDir: string;
+  certificateDerPath: string;
+  certificatePemPath: string;
+  privateKeyPath: string;
+  certificateExists: boolean;
+  privateKeyExists: boolean;
+  sha256Thumbprint: string | null;
+  trustedCurrentUserRoot: boolean;
+  warningMessages: string[];
+};
+
 type CredentialSummary = {
   id: string;
   providerId: string;
@@ -408,9 +423,13 @@ function formatBytes(bytes: number): string {
 }
 
 function formatUpdaterError(error: unknown): string {
+  return formatTauriRuntimeError(error, "Updater");
+}
+
+function formatTauriRuntimeError(error: unknown, featureName: string): string {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes("invoke") && message.includes("undefined")) {
-    return "Updater is available in the packaged Windows app.";
+    return `${featureName} is available in the packaged Windows app.`;
   }
   return message;
 }
@@ -427,6 +446,10 @@ export function App() {
   const [diagnosticsExport, setDiagnosticsExport] = useState<DiagnosticsExportSnapshot | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [diagnosticsExporting, setDiagnosticsExporting] = useState(false);
+  const [localCertificateAuthority, setLocalCertificateAuthority] =
+    useState<LocalCertificateAuthoritySnapshot | null>(null);
+  const [localCertificateAuthorityError, setLocalCertificateAuthorityError] = useState<string | null>(null);
+  const [localCertificateAuthorityBusy, setLocalCertificateAuthorityBusy] = useState(false);
   const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
   const [updaterState, setUpdaterState] = useState<UpdaterState>("idle");
   const [updaterError, setUpdaterError] = useState<string | null>(null);
@@ -459,6 +482,9 @@ export function App() {
     invoke<AppSettingsSnapshot>("app_settings")
       .then(setAppSettings)
       .catch(() => setAppSettings(null));
+    invoke<LocalCertificateAuthoritySnapshot>("local_certificate_authority")
+      .then(setLocalCertificateAuthority)
+      .catch(() => setLocalCertificateAuthority(null));
     invoke<CredentialSummary[]>("credentials")
       .then(setCredentials)
       .catch(() => setCredentials([]));
@@ -591,6 +617,12 @@ export function App() {
       { track: "global", bindHost: "127.0.0.1", port: 14402, available: true, owner: null, errorMessage: null }
     ] satisfies ProxyPortPreflight[]);
   const availablePlatformPaths = platformPathRows.filter((row) => !row.path.includes("%")).length;
+  const localCaPrepared = Boolean(
+    localCertificateAuthority?.certificateExists && localCertificateAuthority.privateKeyExists
+  );
+  const localCaTrusted = Boolean(localCertificateAuthority?.trustedCurrentUserRoot);
+  const localCaStateLabel = localCaTrusted ? "Trusted" : localCaPrepared ? "Prepared" : "Not ready";
+  const localCaStatusClass = localCaTrusted ? "complete" : localCaPrepared ? "inProgress" : "planned";
   const updaterBusy = updaterState === "checking" || updaterState === "downloading" || updaterState === "installing";
   const updaterProgressPercent =
     updaterProgress?.contentLength && updaterProgress.contentLength > 0
@@ -623,6 +655,15 @@ export function App() {
       .then(setDiagnosticsExport)
       .catch((error) => setDiagnosticsError(String(error)))
       .finally(() => setDiagnosticsExporting(false));
+  }
+
+  function runLocalCertificateAuthorityAction(command: "ensure_local_ca" | "trust_local_ca") {
+    setLocalCertificateAuthorityBusy(true);
+    setLocalCertificateAuthorityError(null);
+    invoke<LocalCertificateAuthoritySnapshot>(command)
+      .then(setLocalCertificateAuthority)
+      .catch((error) => setLocalCertificateAuthorityError(formatTauriRuntimeError(error, "Local CA")))
+      .finally(() => setLocalCertificateAuthorityBusy(false));
   }
 
   async function checkForUpdates() {
@@ -835,6 +876,10 @@ export function App() {
                 {defaultProxyPorts.filter((port) => port.available).length}/{defaultProxyPorts.length}
               </strong>
             </section>
+            <section className="usage-meter">
+              <span>Local CA</span>
+              <strong>{localCaStateLabel}</strong>
+            </section>
           </div>
           <div className="surface-list single-column">
             {platformPathRows.map((row) => (
@@ -854,6 +899,46 @@ export function App() {
                 {systemProxy?.anyEnabled ? "Enabled" : "Disabled"}
               </span>
             </article>
+            <article className="surface-row certificate-row">
+              <div>
+                <strong>Local HTTPS CA</strong>
+                <span>
+                  {localCertificateAuthority?.sha256Thumbprint ??
+                    localCertificateAuthority?.certificateDerPath ??
+                    "%APPDATA%\\AIUsage\\certificates"}
+                </span>
+                {localCertificateAuthority?.certificateDerPath ? (
+                  <span>{localCertificateAuthority.certificateDerPath}</span>
+                ) : null}
+              </div>
+              <span className={`status ${localCaStatusClass}`}>{localCaStateLabel}</span>
+            </article>
+            <div className="certificate-actions">
+              <button
+                className="action-button"
+                type="button"
+                onClick={() => runLocalCertificateAuthorityAction("ensure_local_ca")}
+                disabled={localCertificateAuthorityBusy}
+              >
+                <ShieldCheck size={16} />
+                <span>{localCertificateAuthorityBusy ? "Working" : "Prepare CA"}</span>
+              </button>
+              <button
+                className="action-button primary-action"
+                type="button"
+                onClick={() => runLocalCertificateAuthorityAction("trust_local_ca")}
+                disabled={localCertificateAuthorityBusy || !localCaPrepared || localCaTrusted}
+              >
+                <ShieldCheck size={16} />
+                <span>{localCaTrusted ? "Trusted" : "Trust CA"}</span>
+              </button>
+            </div>
+            {localCertificateAuthority?.warningMessages.length ? (
+              <div className="settings-error">{localCertificateAuthority.warningMessages.join(" · ")}</div>
+            ) : null}
+            {localCertificateAuthorityError ? (
+              <div className="settings-error">{localCertificateAuthorityError}</div>
+            ) : null}
             {defaultProxyPorts.map((port) => (
               <article key={`${port.track}-${port.port}`} className="surface-row">
                 <div>

@@ -27,8 +27,8 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | --- | --- |
 | Desktop shell | Tauri 2 + React + Rust workspace builds on Windows |
 | Contract schema | Core product surfaces, provider identities, proxy tracks, and release targets are covered by fixture tests |
-| Platform adapters | Windows app paths, Credential Manager + DPAPI vault, browser profile discovery, system proxy snapshot, TCP port owner lookup, and sensitive-file permission tightening are implemented behind traits |
-| Platform environment UI | Tauri exposes Windows app/CLI paths, current-user WinHTTP/WinINET proxy snapshot, Chromium/Cursor browser profile discovery, and default proxy port preflight; the Windows UI summarizes proxy state, known paths, endpoint count, detected profiles, and free/busy default ports without reading cookies |
+| Platform adapters | Windows app paths, Credential Manager + DPAPI vault, browser profile discovery, system proxy snapshot, TCP port owner lookup, CurrentUser Root certificate trust adapter, and sensitive-file permission tightening are implemented behind traits |
+| Platform environment UI | Tauri exposes Windows app/CLI paths, current-user WinHTTP/WinINET proxy snapshot, Chromium/Cursor browser profile discovery, local HTTPS CA state, and default proxy port preflight; the Windows UI summarizes proxy state, known paths, endpoint count, detected profiles, certificate trust state, and free/busy default ports without reading cookies |
 | Config transforms | Codex `config.toml` managed blocks and OpenCode provider/model injection are implemented in `aiusage-core` |
 | Config takeover service | Claude/Codex/OpenCode native Windows paths, custom paths, sidecar `.aiusage.bak` backups, idempotent activation, restore, OpenCode JSONC parsing, and Tauri commands are implemented |
 | Proxy runtime | Async Rust passthrough supervisor starts/stops local listeners, exposes health through Tauri, validates client keys, normalizes `/v1` upstream paths, injects upstream auth, streams upstream responses, emits request/usage events, parses OpenAI/Anthropic usage shapes, and surfaces four-track health in the Windows UI |
@@ -41,6 +41,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | App settings | `%APPDATA%\AIUsage\settings.json` stores non-secret Windows preferences, Tauri commands expose load/save, launch-at-login syncs with the HKCU Run registry key, and tray lifecycle flags are consumed by the desktop shell |
 | Tray lifecycle | Tauri tray-icon support is enabled; the tray menu exposes Show AIUsage, Open Settings, and Quit AIUsage; left click/double click restores the main window; close hides the main window when `minimizeToTrayOnClose` or `keepRunningInBackground` is enabled; explicit Quit bypasses close-to-tray |
 | Diagnostics export | Settings can export a secret-free diagnostics metadata JSON under `%LOCALAPPDATA%\AIUsage\diagnostics`, covering app/log/archive path status, file counts, byte totals, recent file metadata, and scan warnings without raw log/config contents |
+| Local HTTPS CA | Windows service can generate an AIUsage local root CA under `%APPDATA%\AIUsage\certificates`, restrict private-key ACLs, compute SHA-256 thumbprint, inspect CurrentUser Root trust, and explicitly trust the CA on user action |
 | Packaging | Windows release workflow builds NSIS and MSI bundles, optionally injects Windows code signing into Tauri bundling, optionally emits updater `.sig` files plus `latest.json`, verifies Authenticode signatures, emits SHA256 checksums, uploads artifacts, and publishes tag release assets |
 
 ## Provider Matrix
@@ -91,7 +92,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | Notifications | Tauri notification plugin or Windows notification integration |
 | Launch at login | HKCU Run registry adapter implemented and wired to Windows settings |
 | System proxy detection | WinHTTP/WinINET APIs |
-| Certificate trust | User certificate store first; admin/local-machine trust as explicit flow |
+| Certificate trust | CurrentUser Root adapter implemented for AIUsage local CA; admin/local-machine trust remains an explicit enterprise flow |
 | Process lifecycle | Rust supervisor, Windows Job Objects if needed |
 | Orphan cleanup | Only AIUsage-owned helper/process instances |
 | Auto update | Tauri updater plugin, signed artifacts, static `latest.json`, Windows passive install mode |

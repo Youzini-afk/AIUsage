@@ -3,15 +3,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use aiusage_tauri::{
     activate_claude_config, activate_codex_config, activate_opencode_config,
     app_settings as load_app_settings, build_phase_a_snapshot, credential_summaries,
-    delete_credential, export_diagnostics as export_windows_diagnostics, managed_config_statuses,
-    platform_environment as build_platform_environment, restore_claude_config,
-    restore_codex_config, restore_opencode_config, save_app_settings as persist_app_settings,
-    save_credential, start_proxy_runtime, stop_proxy_runtime, AppSettingsDocument,
+    delete_credential, ensure_local_certificate_authority as prepare_local_certificate_authority,
+    export_diagnostics as export_windows_diagnostics, local_certificate_authority_status,
+    managed_config_statuses, platform_environment as build_platform_environment,
+    restore_claude_config, restore_codex_config, restore_opencode_config,
+    save_app_settings as persist_app_settings, save_credential, start_proxy_runtime,
+    stop_proxy_runtime, trust_local_certificate_authority, AppSettingsDocument,
     AppSettingsSnapshot, CallAnalyticsInventorySnapshot, CallAnalyticsSnapshot,
     ClaudeActivationRequest, CodexActivationRequest, CredentialSummary, DesktopSnapshot,
-    DiagnosticsExportSnapshot, ManagedConfigStatus, OpenCodeActivationRequest,
-    PlatformEnvironmentSnapshot, ProxyHealth, ProxyPortPreflight, ProxyRuntimeConfig, ProxyTrack,
-    ProxyUsageArchiveSummary, ProxyUsageStats, UpsertCredentialRequest,
+    DiagnosticsExportSnapshot, LocalCertificateAuthoritySnapshot, ManagedConfigStatus,
+    OpenCodeActivationRequest, PlatformEnvironmentSnapshot, ProxyHealth, ProxyPortPreflight,
+    ProxyRuntimeConfig, ProxyTrack, ProxyUsageArchiveSummary, ProxyUsageStats,
+    UpsertCredentialRequest,
 };
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -82,6 +85,21 @@ fn save_app_settings(settings: AppSettingsDocument) -> Result<AppSettingsSnapsho
 #[tauri::command]
 fn export_diagnostics() -> Result<DiagnosticsExportSnapshot, String> {
     export_windows_diagnostics().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn local_certificate_authority() -> Result<LocalCertificateAuthoritySnapshot, String> {
+    local_certificate_authority_status().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn ensure_local_ca() -> Result<LocalCertificateAuthoritySnapshot, String> {
+    prepare_local_certificate_authority().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn trust_local_ca() -> Result<LocalCertificateAuthoritySnapshot, String> {
+    trust_local_certificate_authority().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -269,6 +287,9 @@ pub fn run() {
             app_settings,
             save_app_settings,
             export_diagnostics,
+            local_certificate_authority,
+            ensure_local_ca,
+            trust_local_ca,
             proxy_port_preflight,
             credentials,
             save_provider_credential,

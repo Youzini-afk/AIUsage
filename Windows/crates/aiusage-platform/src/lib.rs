@@ -89,6 +89,11 @@ pub trait AutostartManager {
     fn set_enabled(&self, enabled: bool) -> PlatformResult<()>;
 }
 
+pub trait CertificateTrustStore {
+    fn is_certificate_trusted(&self, sha256_thumbprint: &str) -> PlatformResult<bool>;
+    fn trust_certificate_der(&self, certificate_der: &[u8]) -> PlatformResult<()>;
+}
+
 pub trait ProxySupervisor {
     fn is_track_running(&self, track: ProxyTrack) -> PlatformResult<bool>;
 }
