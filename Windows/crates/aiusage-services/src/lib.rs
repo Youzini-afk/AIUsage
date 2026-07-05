@@ -151,7 +151,7 @@ impl Default for AppSettingsDocument {
         Self {
             version: APP_SETTINGS_VERSION,
             theme_mode: ThemeMode::System,
-            language: AppLanguage::En,
+            language: AppLanguage::Zh,
             auto_refresh_interval_secs: 300,
             proxy_auto_restore_on_launch: false,
             minimize_to_tray_on_close: true,

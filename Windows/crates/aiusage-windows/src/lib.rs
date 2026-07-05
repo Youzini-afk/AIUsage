@@ -6,6 +6,9 @@ use std::{
     ptr::null_mut,
 };
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use aiusage_core::CredentialKind;
 use aiusage_platform::{
     AppPaths, AutostartManager, BrowserProfile, BrowserSessionDiscovery, CertificateTrustStore,
@@ -52,6 +55,9 @@ use windows::{
         },
     },
 };
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Clone, Debug, Default)]
 pub struct WindowsAppPaths;
@@ -315,7 +321,10 @@ pub struct WindowsWslDistributionDiscovery;
 
 impl WslDistributionDiscovery for WindowsWslDistributionDiscovery {
     fn distributions(&self) -> PlatformResult<Vec<WslDistribution>> {
-        let output = match Command::new("wsl.exe").args(["--list", "--quiet"]).output() {
+        let output = match hidden_command("wsl.exe")
+            .args(["--list", "--quiet"])
+            .output()
+        {
             Ok(output) => output,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error.into()),
@@ -473,7 +482,7 @@ impl FilePermissionGuard for WindowsFilePermissionGuard {
 
         let account =
             current_user_account().ok_or(PlatformError::MissingPath("USERDOMAIN/USERNAME"))?;
-        let status = Command::new("icacls")
+        let status = hidden_command("icacls")
             .arg(path.as_os_str())
             .arg("/inheritance:r")
             .arg("/grant:r")
@@ -863,7 +872,7 @@ fn wsl_distribution_with_home(
 }
 
 fn wsl_home_for_distribution(name: &str) -> PlatformResult<String> {
-    let output = Command::new("wsl.exe")
+    let output = hidden_command("wsl.exe")
         .args(["-d", name, "sh", "-lc", "printf %s \"$HOME\""])
         .output()?;
     if !output.status.success() {
@@ -874,6 +883,15 @@ fn wsl_home_for_distribution(name: &str) -> PlatformResult<String> {
         return Err(PlatformError::MissingPath("WSL_HOME"));
     }
     Ok(home)
+}
+
+fn hidden_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
 }
 
 fn decode_command_output(bytes: &[u8]) -> String {

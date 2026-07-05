@@ -25,7 +25,7 @@ import {
   TerminalSquare,
   Trash2
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 type FeatureStatus = "planned" | "foundationReady" | "inProgress" | "complete" | "blocked";
 
@@ -326,6 +326,208 @@ type UpdaterProgress = {
   contentLength: number | null;
 };
 
+type LazyDataKey = "platform" | "usage" | "callAnalytics" | "configs" | "certificate" | "credentials";
+type LazyDataStatus = "idle" | "loading" | "loaded";
+
+const initialLazyDataStatus: Record<LazyDataKey, LazyDataStatus> = {
+  platform: "idle",
+  usage: "idle",
+  callAnalytics: "idle",
+  configs: "idle",
+  certificate: "idle",
+  credentials: "idle"
+};
+
+const zhText: Record<string, string> = {
+  "Windows Phase A": "Windows A 阶段",
+  Dashboard: "仪表盘",
+  Subscriptions: "订阅",
+  "API Providers": "API 提供商",
+  "Codex Proxy": "Codex 代理",
+  "OpenCode Proxy": "OpenCode 代理",
+  "Claude Code Proxy": "Claude Code 代理",
+  "Usage Stats": "用量统计",
+  "Call Analytics": "调用分析",
+  Inbox: "收件箱",
+  Settings: "设置",
+  "AIUsage sections": "AIUsage 分区",
+  Notifications: "通知",
+  "Platform settings": "平台设置",
+  "Windows product line": "Windows 产品线",
+  "Credential vault": "凭证保险库",
+  "Provider contracts": "提供商适配",
+  "Proxy and config takeover": "代理与配置接管",
+  "Usage archive": "用量归档",
+  "Proxy token ledger": "代理 Token 账本",
+  "Local call inventory": "本地调用清单",
+  "Action inbox": "待处理事项",
+  "Windows platform": "Windows 平台",
+  "Product surfaces": "产品模块",
+  "Release targets": "发布目标",
+  "Proxy tracks running": "运行中的代理轨道",
+  "Surface readiness": "模块就绪度",
+  "Windows parity map": "Windows 对齐地图",
+  "Supported providers": "已支持的提供商",
+  Ready: "就绪",
+  Planned: "计划中",
+  Blocked: "受阻",
+  Foundation: "基础可用",
+  "In progress": "进行中",
+  Complete: "完成",
+  Warning: "警告",
+  Action: "处理",
+  Review: "查看",
+  Clear: "清爽",
+  Missing: "缺失",
+  Detected: "已检测",
+  None: "无",
+  Available: "可用",
+  Managed: "已接管",
+  Stored: "已存储",
+  Empty: "空",
+  Running: "运行中",
+  Starting: "启动中",
+  Stopping: "停止中",
+  Failed: "失败",
+  Stopped: "已停止",
+  Free: "空闲",
+  Busy: "占用",
+  Enabled: "已启用",
+  Disabled: "已禁用",
+  Trusted: "已信任",
+  Prepared: "已准备",
+  "Not ready": "未准备",
+  "No data": "无数据",
+  "Items needing attention": "需要关注的事项",
+  "No action items": "暂无待处理事项",
+  "Runtime warnings and scan errors will appear here.": "运行时警告和扫描错误会显示在这里。",
+  "Platform status": "平台状态",
+  "Windows environment": "Windows 环境",
+  "System proxy": "系统代理",
+  "Browser profiles": "浏览器配置",
+  "Browser profile": "浏览器配置",
+  "Known paths": "已知路径",
+  "WSL distros": "WSL 发行版",
+  "Proxy endpoints": "代理端点",
+  "Free default ports": "默认端口空闲数",
+  "Local CA": "本地 CA",
+  "Local HTTPS CA": "本地 HTTPS CA",
+  "App config": "应用配置",
+  "App data": "应用数据",
+  "Native Claude": "本机 Claude",
+  "Native Codex": "本机 Codex",
+  "Native OpenCode": "本机 OpenCode",
+  "Not configured": "未配置",
+  "Not detected": "未检测到",
+  "No cookie database found": "未找到 Cookie 数据库",
+  Diagnostics: "诊断",
+  Updater: "更新器",
+  "Proxy runtime": "代理运行时",
+  "Prepare CA": "准备 CA",
+  "Trust CA": "信任 CA",
+  Working: "处理中",
+  "Target safety": "目标安全",
+  "Config takeover": "配置接管",
+  Backups: "备份",
+  Warnings: "警告",
+  "No backup": "无备份",
+  "Config takeover is available in the packaged Windows app.": "配置接管需要在已打包的 Windows 应用中使用。",
+  "Provider credentials": "提供商凭证",
+  Provider: "提供商",
+  Kind: "类型",
+  Label: "标签",
+  Secret: "密钥",
+  "Save credential": "保存凭证",
+  Saving: "保存中",
+  "No credentials": "暂无凭证",
+  "Windows Credential Manager / DPAPI vault": "Windows 凭据管理器 / DPAPI 保险库",
+  "Secret stored": "密钥已保存",
+  "No secret stored": "未保存密钥",
+  "Local inventory": "本地清单",
+  "Call Analytics sources": "调用分析来源",
+  "Event aggregation": "事件聚合",
+  "Call Analytics ledger": "调用分析账本",
+  Total: "总计",
+  Skills: "技能",
+  Skill: "技能",
+  Tools: "工具",
+  Tool: "工具",
+  Web: "网页",
+  Other: "其他",
+  "No calls indexed": "暂无调用索引",
+  Preferences: "偏好",
+  "Windows settings": "Windows 设置",
+  Theme: "主题",
+  System: "跟随系统",
+  Light: "浅色",
+  Dark: "深色",
+  Language: "语言",
+  English: "English",
+  "Refresh interval": "刷新间隔",
+  "Launch at login": "开机启动",
+  "Restore proxies on launch": "启动时恢复代理",
+  "Minimize to tray on close": "关闭时最小化到托盘",
+  "Keep running in background": "保持后台运行",
+  "Export diagnostics": "导出诊断",
+  Exporting: "导出中",
+  "Release foundation": "发布基础",
+  "Windows artifacts": "Windows 构建产物",
+  Checking: "检查中",
+  "Up to date": "已是最新",
+  "Update available": "有可用更新",
+  Downloading: "下载中",
+  Installing: "安装中",
+  "Installer started": "安装器已启动",
+  Unavailable: "不可用",
+  Check: "检查",
+  Install: "安装",
+  "Runtime health": "运行状态",
+  "Proxy supervisor": "代理管理器",
+  Track: "轨道",
+  Protocol: "协议",
+  "Bind host": "绑定主机",
+  Port: "端口",
+  "Upstream URL": "上游地址",
+  "Upstream key": "上游密钥",
+  "Client key": "客户端密钥",
+  Model: "模型",
+  Preflight: "预检",
+  Start: "启动",
+  Stop: "停止",
+  "Not listening": "未监听",
+  Requests: "请求数",
+  Input: "输入",
+  Output: "输出",
+  Cache: "缓存",
+  Off: "关闭",
+  files: "个文件",
+  skills: "技能",
+  "session files": "会话文件",
+  "config files": "配置文件",
+  warnings: "警告",
+  requests: "次请求",
+  "No usage recorded": "暂无用量记录",
+  "Current installed build": "当前已安装版本",
+  "Signed Windows updater endpoint": "已签名的 Windows 更新端点",
+  "Update download progress": "更新下载进度",
+  "OpenAI Responses": "OpenAI Responses",
+  "OpenAI Chat": "OpenAI Chat",
+  "Anthropic Messages": "Anthropic Messages",
+  Passthrough: "透传",
+  "Claude Code": "Claude Code",
+  Global: "全局",
+  Native: "本机",
+  Custom: "自定义",
+  WSL: "WSL",
+  "API key": "API 密钥",
+  "Auth file": "认证文件",
+  Cookie: "Cookie",
+  OAuth: "OAuth",
+  Token: "令牌",
+  "Web session": "Web 会话",
+  "Not synced": "未同步"
+};
+
 const fallbackSnapshot: DesktopSnapshot = {
   appName: "AIUsage",
   phase: "Windows Phase A",
@@ -399,7 +601,7 @@ const proxySectionConfigKinds: Record<string, ManagedConfigKind> = {
 const defaultAppSettings: AppSettingsDocument = {
   version: 1,
   themeMode: "system",
-  language: "en",
+  language: "zh",
   autoRefreshIntervalSecs: 300,
   proxyAutoRestoreOnLaunch: false,
   minimizeToTrayOnClose: true,
@@ -768,6 +970,10 @@ function formatTauriRuntimeError(error: unknown, featureName: string): string {
   return message;
 }
 
+function LazyMount({ when, children }: { when: boolean; children: () => ReactNode }) {
+  return when ? <>{children()}</> : null;
+}
+
 export function App() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>(fallbackSnapshot);
   const [platformEnvironment, setPlatformEnvironment] = useState<PlatformEnvironmentSnapshot | null>(null);
@@ -802,41 +1008,18 @@ export function App() {
   const [credentialError, setCredentialError] = useState<string | null>(null);
   const [deletingCredentialId, setDeletingCredentialId] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState("dashboard");
+  const [lazyDataStatus, setLazyDataStatus] = useState<Record<LazyDataKey, LazyDataStatus>>(initialLazyDataStatus);
 
   useEffect(() => {
     invoke<DesktopSnapshot>("app_snapshot")
       .then(setSnapshot)
       .catch(() => setSnapshot(fallbackSnapshot));
-    invoke<PlatformEnvironmentSnapshot>("platform_environment")
-      .then(setPlatformEnvironment)
-      .catch(() => setPlatformEnvironment(null));
     invoke<ProxyHealth[]>("proxy_statuses")
       .then(setProxyHealth)
       .catch(() => setProxyHealth([]));
-    invoke<ProxyUsageArchiveSummary[]>("proxy_usage_archives")
-      .then(setProxyArchives)
-      .catch(() => setProxyArchives([]));
-    invoke<ProxyUsageStats>("proxy_usage_stats")
-      .then(setProxyUsageStats)
-      .catch(() => setProxyUsageStats(null));
-    invoke<CallAnalyticsInventorySnapshot>("call_analytics_inventory")
-      .then(setCallInventory)
-      .catch(() => setCallInventory(null));
-    invoke<CallAnalyticsSnapshot>("call_analytics_snapshot")
-      .then(setCallSnapshot)
-      .catch(() => setCallSnapshot(null));
-    invoke<ManagedConfigStatus[]>("config_statuses")
-      .then(setManagedConfigStatuses)
-      .catch((error) => setManagedConfigError(formatTauriRuntimeError(error, "Config takeover")));
     invoke<AppSettingsSnapshot>("app_settings")
       .then(setAppSettings)
       .catch(() => setAppSettings(null));
-    invoke<LocalCertificateAuthoritySnapshot>("local_certificate_authority")
-      .then(setLocalCertificateAuthority)
-      .catch(() => setLocalCertificateAuthority(null));
-    invoke<CredentialSummary[]>("credentials")
-      .then(setCredentials)
-      .catch(() => setCredentials([]));
   }, []);
 
   useEffect(() => {
@@ -873,7 +1056,10 @@ export function App() {
     () => snapshot.surfaces.find((surface) => surface.id === activeSection),
     [activeSection, snapshot.surfaces]
   );
-  const activeSectionEyebrow = sectionEyebrows[activeSection] ?? "Windows product line";
+  const settingsDocument = appSettings?.settings ?? defaultAppSettings;
+  const tx = (text: string) => (settingsDocument.language === "zh" ? zhText[text] ?? text : text);
+  const activeSectionEyebrow = tx(sectionEyebrows[activeSection] ?? "Windows product line");
+  const activeSectionTitle = tx(activeSurface?.label ?? "Dashboard");
   const activeManagedConfigKind = proxySectionConfigKinds[activeSection];
   const activeProxySection = Boolean(activeManagedConfigKind);
 
@@ -953,14 +1139,13 @@ export function App() {
   const topCallEntries = [...callEntries]
     .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
     .slice(0, 6);
-  const settingsDocument = appSettings?.settings ?? defaultAppSettings;
   const platformPathRows = [
-    { label: "App config", path: platformEnvironment?.paths.appConfigDir ?? "%APPDATA%\\AIUsage" },
-    { label: "App data", path: platformEnvironment?.paths.appDataDir ?? "%LOCALAPPDATA%\\AIUsage" },
-    { label: "Native Claude", path: platformEnvironment?.paths.claudeHome ?? "%USERPROFILE%\\.claude" },
-    { label: "Native Codex", path: platformEnvironment?.paths.codexHome ?? "%USERPROFILE%\\.codex" },
+    { label: tx("App config"), path: platformEnvironment?.paths.appConfigDir ?? "%APPDATA%\\AIUsage" },
+    { label: tx("App data"), path: platformEnvironment?.paths.appDataDir ?? "%LOCALAPPDATA%\\AIUsage" },
+    { label: tx("Native Claude"), path: platformEnvironment?.paths.claudeHome ?? "%USERPROFILE%\\.claude" },
+    { label: tx("Native Codex"), path: platformEnvironment?.paths.codexHome ?? "%USERPROFILE%\\.codex" },
     {
-      label: "Native OpenCode",
+      label: tx("Native OpenCode"),
       path: platformEnvironment?.paths.opencodeConfigDir ?? "%USERPROFILE%\\.config\\opencode"
     }
   ];
@@ -1045,6 +1230,115 @@ export function App() {
       }))
     )
   ].filter((item): item is { title: string; detail: string; status: FeatureStatus } => Boolean(item));
+
+  useEffect(() => {
+    if (activeSection === "settings") {
+      loadLazyPlatformEnvironment();
+      loadLazyCertificate();
+    } else if (activeSection === "subscriptions") {
+      loadLazyCredentials();
+    } else if (activeSection === "usageStats") {
+      loadLazyUsage();
+    } else if (activeSection === "callAnalytics") {
+      loadLazyCallAnalytics();
+    } else if (activeSection === "inbox") {
+      loadLazyPlatformEnvironment();
+      loadLazyCertificate();
+      loadLazyConfigs();
+      loadLazyCredentials();
+    }
+
+    if (activeProxySection) {
+      loadLazyConfigs();
+      refreshProxyStatuses();
+    }
+  }, [activeSection, activeProxySection]);
+
+  function startLazyLoad(key: LazyDataKey): boolean {
+    if (lazyDataStatus[key] !== "idle") {
+      return false;
+    }
+    setLazyDataStatus((previous) => ({ ...previous, [key]: "loading" }));
+    return true;
+  }
+
+  function finishLazyLoad(key: LazyDataKey) {
+    setLazyDataStatus((previous) => ({ ...previous, [key]: "loaded" }));
+  }
+
+  function loadLazyPlatformEnvironment() {
+    if (!startLazyLoad("platform")) {
+      return;
+    }
+    invoke<PlatformEnvironmentSnapshot>("platform_environment")
+      .then(setPlatformEnvironment)
+      .catch(() => setPlatformEnvironment(null))
+      .finally(() => finishLazyLoad("platform"));
+  }
+
+  function loadLazyUsage() {
+    if (!startLazyLoad("usage")) {
+      return;
+    }
+    Promise.all([
+      invoke<ProxyUsageArchiveSummary[]>("proxy_usage_archives")
+        .then(setProxyArchives)
+        .catch(() => setProxyArchives([])),
+      invoke<ProxyUsageStats>("proxy_usage_stats")
+        .then(setProxyUsageStats)
+        .catch(() => setProxyUsageStats(null))
+    ]).finally(() => finishLazyLoad("usage"));
+  }
+
+  function loadLazyCallAnalytics() {
+    if (!startLazyLoad("callAnalytics")) {
+      return;
+    }
+    Promise.all([
+      invoke<CallAnalyticsInventorySnapshot>("call_analytics_inventory")
+        .then(setCallInventory)
+        .catch(() => setCallInventory(null)),
+      invoke<CallAnalyticsSnapshot>("call_analytics_snapshot")
+        .then(setCallSnapshot)
+        .catch(() => setCallSnapshot(null))
+    ]).finally(() => finishLazyLoad("callAnalytics"));
+  }
+
+  function loadLazyConfigs() {
+    if (!startLazyLoad("configs")) {
+      return;
+    }
+    invoke<ManagedConfigStatus[]>("config_statuses")
+      .then(setManagedConfigStatuses)
+      .catch((error) => setManagedConfigError(formatTauriRuntimeError(error, "Config takeover")))
+      .finally(() => finishLazyLoad("configs"));
+  }
+
+  function loadLazyCertificate() {
+    if (!startLazyLoad("certificate")) {
+      return;
+    }
+    invoke<LocalCertificateAuthoritySnapshot>("local_certificate_authority")
+      .then(setLocalCertificateAuthority)
+      .catch(() => setLocalCertificateAuthority(null))
+      .finally(() => finishLazyLoad("certificate"));
+  }
+
+  function loadLazyCredentials() {
+    if (!startLazyLoad("credentials")) {
+      return;
+    }
+    invoke<CredentialSummary[]>("credentials")
+      .then(setCredentials)
+      .catch(() => setCredentials([]))
+      .finally(() => finishLazyLoad("credentials"));
+  }
+
+  function refreshProxyStatuses() {
+    invoke<ProxyHealth[]>("proxy_statuses")
+      .then(setProxyHealth)
+      .catch(() => setProxyHealth([]));
+  }
 
   function activateSection(sectionId: string) {
     setActiveSection(sectionId);
@@ -1369,10 +1663,10 @@ export function App() {
           <div className="brand-mark">AI</div>
           <div>
             <h1>{snapshot.appName}</h1>
-            <p>{snapshot.phase}</p>
+            <p>{tx(snapshot.phase)}</p>
           </div>
         </div>
-        <nav aria-label="AIUsage sections">
+        <nav aria-label={tx("AIUsage sections")}>
           {sections.map((section) => {
             const Icon = section.icon;
             const isActive = activeSection === section.id;
@@ -1384,7 +1678,7 @@ export function App() {
                 onClick={() => activateSection(section.id)}
               >
                 <Icon size={17} />
-                <span>{section.label}</span>
+                <span>{tx(section.label)}</span>
               </button>
             );
           })}
@@ -1395,16 +1689,16 @@ export function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">{activeSectionEyebrow}</p>
-            <h2>{activeSurface?.label ?? "Dashboard"}</h2>
+            <h2>{activeSectionTitle}</h2>
           </div>
           <div className="topbar-actions">
-            <button type="button" title="Notifications" aria-label="Notifications">
+            <button type="button" title={tx("Notifications")} aria-label={tx("Notifications")}>
               <Bell size={18} />
             </button>
             <button
               type="button"
-              title="Platform settings"
-              aria-label="Platform settings"
+              title={tx("Platform settings")}
+              aria-label={tx("Platform settings")}
               onClick={() => activateSection("settings")}
             >
               <MonitorCog size={18} />
@@ -1412,188 +1706,174 @@ export function App() {
           </div>
         </header>
 
-        <div className="summary-grid" hidden={activeSection !== "dashboard"}>
-          <section className="stat-tile">
-            <span>Product surfaces</span>
-            <strong>
-              {readyCount}/{snapshot.surfaces.length}
-            </strong>
-          </section>
-          <section className="stat-tile">
-            <span>Provider contracts</span>
-            <strong>{snapshot.providers.length}</strong>
-          </section>
-          <section className="stat-tile">
-            <span>Release targets</span>
-            <strong>{snapshot.releaseTargets.length}</strong>
-          </section>
-          <section className="stat-tile">
-            <span>Proxy tracks running</span>
-            <strong>
-              {runningProxyCount}/{proxyHealth.length || 4}
-            </strong>
-          </section>
-          <section className="stat-tile">
-            <span>Usage archive rows</span>
-            <strong>{archivedUsageRows}</strong>
-          </section>
-          <section className="stat-tile">
-            <span>Proxy tokens</span>
-            <strong>{totalProxyTokens.toLocaleString()}</strong>
-          </section>
-          <section className="stat-tile">
-            <span>Call sources</span>
-            <strong>
-              {availableCallSources}/{inventoryRows.length}
-            </strong>
-          </section>
-          <section className="stat-tile">
-            <span>Skills detected</span>
-            <strong>{detectedSkills.toLocaleString()}</strong>
-          </section>
-          <section className="stat-tile">
-            <span>MCP servers</span>
-            <strong>{detectedMcpServers.toLocaleString()}</strong>
-          </section>
-          <section className="stat-tile">
-            <span>Call events</span>
-            <strong>{totalCallEvents.toLocaleString()}</strong>
-          </section>
-          <section className="stat-tile">
-            <span>Stored credentials</span>
-            <strong>{credentials.length}</strong>
-          </section>
-        </div>
+        <LazyMount when={activeSection === "dashboard"}>
+          {() => (
+            <>
+              <div className="summary-grid">
+                <section className="stat-tile">
+                  <span>{tx("Product surfaces")}</span>
+                  <strong>
+                    {readyCount}/{snapshot.surfaces.length}
+                  </strong>
+                </section>
+                <section className="stat-tile">
+                  <span>{tx("Provider contracts")}</span>
+                  <strong>{snapshot.providers.length}</strong>
+                </section>
+                <section className="stat-tile">
+                  <span>{tx("Release targets")}</span>
+                  <strong>{snapshot.releaseTargets.length}</strong>
+                </section>
+                <section className="stat-tile">
+                  <span>{tx("Proxy tracks running")}</span>
+                  <strong>
+                    {runningProxyCount}/{proxyHealth.length || 4}
+                  </strong>
+                </section>
+              </div>
 
-        <section className="panel" hidden={activeSection !== "dashboard"}>
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Surface readiness</p>
-              <h3>Windows parity map</h3>
-            </div>
-            <Network size={18} />
-          </div>
-          <div className="surface-list">
-            {snapshot.surfaces.map((surface) => (
-              <article key={surface.id} className="surface-row">
-                <div>
-                  <strong>{surface.label}</strong>
-                  <span>{surface.id}</span>
-                </div>
-                <span className={`status ${surface.status}`}>{statusLabel(surface.status)}</span>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel" hidden={activeSection !== "apiProviders"}>
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Provider contracts</p>
-              <h3>Supported providers</h3>
-            </div>
-            <Layers3 size={18} />
-          </div>
-          <div className="summary-grid compact-summary">
-            <section className="stat-tile">
-              <span>Ready</span>
-              <strong>{snapshot.providers.filter((provider) => provider.status !== "planned").length}</strong>
-            </section>
-            <section className="stat-tile">
-              <span>Planned</span>
-              <strong>{snapshot.providers.filter((provider) => provider.status === "planned").length}</strong>
-            </section>
-            <section className="stat-tile">
-              <span>Blocked</span>
-              <strong>{snapshot.providers.filter((provider) => provider.status === "blocked").length}</strong>
-            </section>
-          </div>
-          <div className="surface-list">
-            {snapshot.providers.map((provider) => (
-              <article key={provider.id} className="surface-row">
-                <div>
-                  <strong>{provider.label}</strong>
-                  <span>{provider.id}</span>
-                </div>
-                <span className={`status ${provider.status}`}>{statusLabel(provider.status)}</span>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel" hidden={activeSection !== "inbox"}>
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Action inbox</p>
-              <h3>Items needing attention</h3>
-            </div>
-            <MessageSquareText size={18} />
-          </div>
-          <div className="surface-list single-column">
-            {inboxItems.length ? (
-              inboxItems.map((item, index) => (
-                <article key={`${item.title}-${index}`} className="surface-row">
+              <section className="panel">
+                <div className="panel-heading">
                   <div>
-                    <strong>{item.title}</strong>
-                    <span>{item.detail}</span>
+                    <p className="eyebrow">{tx("Surface readiness")}</p>
+                    <h3>{tx("Windows parity map")}</h3>
                   </div>
-                  <span className={`status ${item.status}`}>
-                    {item.status === "blocked" ? "Action" : "Review"}
-                  </span>
-                </article>
-              ))
-            ) : (
-              <article className="surface-row">
-                <div>
-                  <strong>No action items</strong>
-                  <span>Runtime warnings and scan errors will appear here.</span>
+                  <Network size={18} />
                 </div>
-                <span className="status complete">Clear</span>
-              </article>
-            )}
-          </div>
-        </section>
+                <div className="surface-list">
+                  {snapshot.surfaces.map((surface) => (
+                    <article key={surface.id} className="surface-row">
+                      <div>
+                        <strong>{tx(surface.label)}</strong>
+                        <span>{surface.id}</span>
+                      </div>
+                      <span className={`status ${surface.status}`}>{tx(statusLabel(surface.status))}</span>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
+        </LazyMount>
 
-        <section className="panel compact-panel" hidden={activeSection !== "settings"}>
+        <LazyMount when={activeSection === "apiProviders"}>
+          {() => (
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">{tx("Provider contracts")}</p>
+                  <h3>{tx("Supported providers")}</h3>
+                </div>
+                <Layers3 size={18} />
+              </div>
+              <div className="summary-grid compact-summary">
+                <section className="stat-tile">
+                  <span>{tx("Ready")}</span>
+                  <strong>{snapshot.providers.filter((provider) => provider.status !== "planned").length}</strong>
+                </section>
+                <section className="stat-tile">
+                  <span>{tx("Planned")}</span>
+                  <strong>{snapshot.providers.filter((provider) => provider.status === "planned").length}</strong>
+                </section>
+                <section className="stat-tile">
+                  <span>{tx("Blocked")}</span>
+                  <strong>{snapshot.providers.filter((provider) => provider.status === "blocked").length}</strong>
+                </section>
+              </div>
+              <div className="surface-list">
+                {snapshot.providers.map((provider) => (
+                  <article key={provider.id} className="surface-row">
+                    <div>
+                      <strong>{provider.label}</strong>
+                      <span>{provider.id}</span>
+                    </div>
+                    <span className={`status ${provider.status}`}>{tx(statusLabel(provider.status))}</span>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
+        </LazyMount>
+
+        <LazyMount when={activeSection === "inbox"}>
+          {() => (
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="eyebrow">{tx("Action inbox")}</p>
+                  <h3>{tx("Items needing attention")}</h3>
+                </div>
+                <MessageSquareText size={18} />
+              </div>
+              <div className="surface-list single-column">
+                {inboxItems.length ? (
+                  inboxItems.map((item, index) => (
+                    <article key={`${item.title}-${index}`} className="surface-row">
+                      <div>
+                        <strong>{tx(item.title)}</strong>
+                        <span>{item.detail}</span>
+                      </div>
+                      <span className={`status ${item.status}`}>
+                        {item.status === "blocked" ? tx("Action") : tx("Review")}
+                      </span>
+                    </article>
+                  ))
+                ) : (
+                  <article className="surface-row">
+                    <div>
+                      <strong>{tx("No action items")}</strong>
+                      <span>{tx("Runtime warnings and scan errors will appear here.")}</span>
+                    </div>
+                    <span className="status complete">{tx("Clear")}</span>
+                  </article>
+                )}
+              </div>
+            </section>
+          )}
+        </LazyMount>
+
+        <LazyMount when={activeSection === "settings"}>
+          {() => (
+        <section className="panel compact-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Platform status</p>
-              <h3>Windows environment</h3>
+              <p className="eyebrow">{tx("Platform status")}</p>
+              <h3>{tx("Windows environment")}</h3>
             </div>
             <MonitorCog size={18} />
           </div>
           <div className="usage-grid">
             <section className="usage-meter">
-              <span>System proxy</span>
-              <strong>{systemProxy?.anyEnabled ? "On" : "Off"}</strong>
+              <span>{tx("System proxy")}</span>
+              <strong>{systemProxy?.anyEnabled ? tx("Enabled") : tx("Disabled")}</strong>
             </section>
             <section className="usage-meter">
-              <span>Browser profiles</span>
+              <span>{tx("Browser profiles")}</span>
               <strong>{browserProfiles.length}</strong>
             </section>
             <section className="usage-meter">
-              <span>Known paths</span>
+              <span>{tx("Known paths")}</span>
               <strong>
                 {availablePlatformPaths}/{platformPathRows.length}
               </strong>
             </section>
             <section className="usage-meter">
-              <span>WSL distros</span>
+              <span>{tx("WSL distros")}</span>
               <strong>{wslDistributions.length}</strong>
             </section>
             <section className="usage-meter">
-              <span>Proxy endpoints</span>
+              <span>{tx("Proxy endpoints")}</span>
               <strong>{[systemProxy?.http, systemProxy?.https, systemProxy?.socks].filter(Boolean).length}</strong>
             </section>
             <section className="usage-meter">
-              <span>Free default ports</span>
+              <span>{tx("Free default ports")}</span>
               <strong>
                 {defaultProxyPorts.filter((port) => port.available).length}/{defaultProxyPorts.length}
               </strong>
             </section>
             <section className="usage-meter">
-              <span>Local CA</span>
-              <strong>{localCaStateLabel}</strong>
+              <span>{tx("Local CA")}</span>
+              <strong>{tx(localCaStateLabel)}</strong>
             </section>
           </div>
           <div className="surface-list single-column">
@@ -1622,7 +1902,7 @@ export function App() {
               return (
                 <article key={`wsl-${distribution.name}`} className="surface-row">
                   <div>
-                    <strong>WSL · {distribution.name}</strong>
+                    <strong>WSL · {detected ? distribution.name : tx("Not detected")}</strong>
                     <span>
                       Claude {distribution.claudeHome} · Codex {distribution.codexHome}
                     </span>
@@ -1634,23 +1914,23 @@ export function App() {
                       distribution.errorMessage ? "blocked" : detected ? "complete" : "runtime-stopped"
                     }`}
                   >
-                    {distribution.errorMessage ? "Warning" : detected ? "Detected" : "None"}
+                    {distribution.errorMessage ? tx("Warning") : detected ? tx("Detected") : tx("None")}
                   </span>
                 </article>
               );
             })}
             <article className="surface-row">
               <div>
-                <strong>System proxy</strong>
-                <span>{systemProxy?.http ?? systemProxy?.https ?? systemProxy?.socks ?? "Not configured"}</span>
+                <strong>{tx("System proxy")}</strong>
+                <span>{systemProxy?.http ?? systemProxy?.https ?? systemProxy?.socks ?? tx("Not configured")}</span>
               </div>
               <span className={`status ${systemProxy?.anyEnabled ? "runtime-running" : "runtime-stopped"}`}>
-                {systemProxy?.anyEnabled ? "Enabled" : "Disabled"}
+                {systemProxy?.anyEnabled ? tx("Enabled") : tx("Disabled")}
               </span>
             </article>
             <article className="surface-row certificate-row">
               <div>
-                <strong>Local HTTPS CA</strong>
+                <strong>{tx("Local HTTPS CA")}</strong>
                 <span>
                   {localCertificateAuthority?.sha256Thumbprint ??
                     localCertificateAuthority?.certificateDerPath ??
@@ -1660,7 +1940,7 @@ export function App() {
                   <span>{localCertificateAuthority.certificateDerPath}</span>
                 ) : null}
               </div>
-              <span className={`status ${localCaStatusClass}`}>{localCaStateLabel}</span>
+              <span className={`status ${localCaStatusClass}`}>{tx(localCaStateLabel)}</span>
             </article>
             <div className="certificate-actions">
               <button
@@ -1670,7 +1950,7 @@ export function App() {
                 disabled={localCertificateAuthorityBusy}
               >
                 <ShieldCheck size={16} />
-                <span>{localCertificateAuthorityBusy ? "Working" : "Prepare CA"}</span>
+                <span>{localCertificateAuthorityBusy ? tx("Working") : tx("Prepare CA")}</span>
               </button>
               <button
                 className="action-button primary-action"
@@ -1679,7 +1959,7 @@ export function App() {
                 disabled={localCertificateAuthorityBusy || !localCaPrepared || localCaTrusted}
               >
                 <ShieldCheck size={16} />
-                <span>{localCaTrusted ? "Trusted" : "Trust CA"}</span>
+                <span>{localCaTrusted ? tx("Trusted") : tx("Trust CA")}</span>
               </button>
             </div>
             {localCertificateAuthority?.warningMessages.length ? (
@@ -1697,11 +1977,11 @@ export function App() {
                   <span>
                     {port.owner
                       ? `PID ${port.owner.processId}${port.owner.imagePath ? ` · ${port.owner.imagePath}` : ""}`
-                      : port.errorMessage ?? "Available"}
+                    : port.errorMessage ?? tx("Available")}
                   </span>
                 </div>
                 <span className={`status ${port.available ? "runtime-running" : "runtime-failed"}`}>
-                  {port.available ? "Free" : "Busy"}
+                  {port.available ? tx("Free") : tx("Busy")}
                 </span>
               </article>
             ))}
@@ -1712,9 +1992,9 @@ export function App() {
               <article key={`${profile.browserName}-${profile.profileName}`} className="surface-row">
                 <div>
                   <strong>
-                    {profile.browserName} · {profile.profileName}
+                    {tx(profile.browserName)} · {tx(profile.profileName)}
                   </strong>
-                  <span>{profile.cookiesDbPath || "No cookie database found"}</span>
+                  <span>{profile.cookiesDbPath || tx("No cookie database found")}</span>
                 </div>
               </article>
             ))}
@@ -1725,28 +2005,32 @@ export function App() {
           ) : null}
           {platformEnvironment?.wslError ? <div className="settings-error">{platformEnvironment.wslError}</div> : null}
         </section>
+          )}
+        </LazyMount>
 
-        <section className="panel compact-panel" hidden={!activeProxySection}>
+        <LazyMount when={activeProxySection}>
+          {() => (
+        <section className="panel compact-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Target safety</p>
-              <h3>Config takeover</h3>
+              <p className="eyebrow">{tx("Target safety")}</p>
+              <h3>{tx("Config takeover")}</h3>
             </div>
             <Braces size={18} />
           </div>
           <div className="usage-grid">
             <section className="usage-meter">
-              <span>Managed</span>
+              <span>{tx("Managed")}</span>
               <strong>
                 {renderedManagedConfigManagedCount}/{renderedManagedConfigStatuses.length}
               </strong>
             </section>
             <section className="usage-meter">
-              <span>Backups</span>
+              <span>{tx("Backups")}</span>
               <strong>{renderedManagedConfigBackupCount}</strong>
             </section>
             <section className="usage-meter">
-              <span>Warnings</span>
+              <span>{tx("Warnings")}</span>
               <strong>{renderedManagedConfigWarningCount}</strong>
             </section>
           </div>
@@ -1755,17 +2039,17 @@ export function App() {
               <article key={`${status.kind}-${status.targetKind}-${status.configPath}`} className="surface-row config-row">
                 <div>
                   <strong>
-                    {managedConfigKindLabel(status.kind)} · {managedConfigTargetLabel(status.targetKind)}
+                    {tx(managedConfigKindLabel(status.kind))} · {tx(managedConfigTargetLabel(status.targetKind))}
                   </strong>
                   <span>{status.configPath}</span>
                   <span>
-                    {status.backupExists ? `Backup ${status.backupPath}` : "No backup"}
+                    {status.backupExists ? `Backup ${status.backupPath}` : tx("No backup")}
                     {status.usesJsonc ? " · JSONC" : ""}
                   </span>
                   {status.parseError ? <span>{status.parseError}</span> : null}
                 </div>
                 <div className="row-actions">
-                  <span className={`status ${managedConfigStatusClass(status)}`}>{managedConfigStatusLabel(status)}</span>
+                  <span className={`status ${managedConfigStatusClass(status)}`}>{tx(managedConfigStatusLabel(status))}</span>
                   <button
                     className="icon-action"
                     type="button"
@@ -1792,18 +2076,22 @@ export function App() {
           </div>
           {managedConfigError ? <div className="settings-error">{managedConfigError}</div> : null}
         </section>
+          )}
+        </LazyMount>
 
-        <section className="panel compact-panel" hidden={activeSection !== "subscriptions"}>
+        <LazyMount when={activeSection === "subscriptions"}>
+          {() => (
+        <section className="panel compact-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Credential vault</p>
-              <h3>Provider credentials</h3>
+              <p className="eyebrow">{tx("Credential vault")}</p>
+              <h3>{tx("Provider credentials")}</h3>
             </div>
             <KeyRound size={18} />
           </div>
           <div className="settings-list credential-form">
             <label className="setting-row">
-              <span>Provider</span>
+              <span>{tx("Provider")}</span>
               <select value={credentialForm.providerId} onChange={(event) => updateCredentialProvider(event.target.value)}>
                 {credentialProviderOptions.map((provider) => (
                   <option key={provider.id} value={provider.id}>
@@ -1813,7 +2101,7 @@ export function App() {
               </select>
             </label>
             <label className="setting-row">
-              <span>Kind</span>
+              <span>{tx("Kind")}</span>
               <select
                 value={credentialForm.kind}
                 onChange={(event) =>
@@ -1825,13 +2113,13 @@ export function App() {
               >
                 {credentialKindOptions.map((kind) => (
                   <option key={kind} value={kind}>
-                    {credentialKindLabel(kind)}
+                    {tx(credentialKindLabel(kind))}
                   </option>
                 ))}
               </select>
             </label>
             <label className="setting-row">
-              <span>Label</span>
+              <span>{tx("Label")}</span>
               <input
                 type="text"
                 value={credentialForm.label}
@@ -1844,7 +2132,7 @@ export function App() {
               />
             </label>
             <label className="setting-row">
-              <span>Secret</span>
+              <span>{tx("Secret")}</span>
               <input
                 type="password"
                 value={credentialForm.secret}
@@ -1864,7 +2152,7 @@ export function App() {
               disabled={credentialBusy || !credentialForm.label.trim() || !credentialForm.secret.trim()}
             >
               <Save size={16} />
-              <span>{credentialBusy ? "Saving" : "Save credential"}</span>
+              <span>{credentialBusy ? tx("Saving") : tx("Save credential")}</span>
             </button>
           </div>
           <div className="surface-list single-column credential-list">
@@ -1876,13 +2164,13 @@ export function App() {
                       {credentialProviderLabel(credential.providerId)} · {credential.label}
                     </strong>
                     <span>
-                      {credentialKindLabel(credential.kind)} · {formatEpochMs(credential.updatedAtEpochMs)}
+                      {tx(credentialKindLabel(credential.kind))} · {formatEpochMs(credential.updatedAtEpochMs)}
                     </span>
-                    <span>{credential.hasSecret ? "Secret stored" : "No secret stored"}</span>
+                    <span>{credential.hasSecret ? tx("Secret stored") : tx("No secret stored")}</span>
                   </div>
                   <div className="row-actions">
                     <span className={`status ${credential.hasSecret ? "complete" : "planned"}`}>
-                      {credential.hasSecret ? "Stored" : "Empty"}
+                      {credential.hasSecret ? tx("Stored") : tx("Empty")}
                     </span>
                     <button
                       className="icon-action"
@@ -1900,21 +2188,26 @@ export function App() {
             ) : (
               <article className="surface-row">
                 <div>
-                  <strong>No credentials</strong>
-                  <span>Windows Credential Manager / DPAPI vault</span>
+                  <strong>{tx("No credentials")}</strong>
+                  <span>{tx("Windows Credential Manager / DPAPI vault")}</span>
                 </div>
-                <span className="status planned">Empty</span>
+                <span className="status planned">{tx("Empty")}</span>
               </article>
             )}
           </div>
           {credentialError ? <div className="settings-error">{credentialError}</div> : null}
         </section>
+          )}
+        </LazyMount>
 
-        <section className="panel" hidden={activeSection !== "callAnalytics"}>
+        <LazyMount when={activeSection === "callAnalytics"}>
+          {() => (
+            <>
+        <section className="panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Local inventory</p>
-              <h3>Call Analytics sources</h3>
+              <p className="eyebrow">{tx("Local inventory")}</p>
+              <h3>{tx("Call Analytics sources")}</h3>
             </div>
             <Activity size={18} />
           </div>
@@ -1925,34 +2218,34 @@ export function App() {
               return (
                 <article key={row.source} className="surface-row inventory-row">
                   <div>
-                    <strong>{callSourceLabel(row.source)}</strong>
+                    <strong>{tx(callSourceLabel(row.source))}</strong>
                     <span>
-                      {row.mcpServerCount.toLocaleString()} MCP · {row.skillCount.toLocaleString()} skills ·{" "}
-                      {row.sessionFileCount.toLocaleString()} session files
+                      {row.mcpServerCount.toLocaleString()} MCP · {row.skillCount.toLocaleString()} {tx("skills")} ·{" "}
+                      {row.sessionFileCount.toLocaleString()} {tx("session files")}
                     </span>
                     <span>
-                      {row.configFileCount}/{row.configPaths.length || 1} config files ·{" "}
-                      {row.warnings.length.toLocaleString()} warnings
+                      {row.configFileCount}/{row.configPaths.length || 1} {tx("config files")} ·{" "}
+                      {row.warnings.length.toLocaleString()} {tx("warnings")}
                     </span>
                   </div>
-                  <span className={`status ${stateClass}`}>{stateLabel}</span>
+                  <span className={`status ${stateClass}`}>{tx(stateLabel)}</span>
                 </article>
               );
             })}
           </div>
         </section>
 
-        <section className="panel" hidden={activeSection !== "callAnalytics"}>
+        <section className="panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Event aggregation</p>
-              <h3>Call Analytics ledger</h3>
+              <p className="eyebrow">{tx("Event aggregation")}</p>
+              <h3>{tx("Call Analytics ledger")}</h3>
             </div>
             <Activity size={18} />
           </div>
           <div className="usage-grid">
             <section className="usage-meter">
-              <span>Total</span>
+              <span>{tx("Total")}</span>
               <strong>{totalCallEvents.toLocaleString()}</strong>
             </section>
             <section className="usage-meter">
@@ -1960,11 +2253,11 @@ export function App() {
               <strong>{mcpCallEvents.toLocaleString()}</strong>
             </section>
             <section className="usage-meter">
-              <span>Skills</span>
+              <span>{tx("Skills")}</span>
               <strong>{skillCallEvents.toLocaleString()}</strong>
             </section>
             <section className="usage-meter">
-              <span>Tools</span>
+              <span>{tx("Tools")}</span>
               <strong>{toolCallEvents.toLocaleString()}</strong>
             </section>
           </div>
@@ -1975,7 +2268,7 @@ export function App() {
                   {
                     source: "codex",
                     kind: "other",
-                    name: "No calls indexed",
+                    name: tx("No calls indexed"),
                     server: null,
                     agent: null,
                     dayKey: "",
@@ -1991,7 +2284,7 @@ export function App() {
                 <div>
                   <strong>{entry.name}</strong>
                   <span>
-                    {callSourceLabel(entry.source)} · {callKindLabel(entry.kind)}
+                    {tx(callSourceLabel(entry.source))} · {tx(callKindLabel(entry.kind))}
                     {entry.agent ? ` · ${entry.agent}` : ""}
                   </span>
                 </div>
@@ -2000,29 +2293,35 @@ export function App() {
             ))}
           </div>
         </section>
+            </>
+          )}
+        </LazyMount>
 
-        <section className="panel compact-panel" hidden={activeSection !== "settings"}>
+        <LazyMount when={activeSection === "settings"}>
+          {() => (
+            <>
+        <section className="panel compact-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Preferences</p>
-              <h3>Windows settings</h3>
+              <p className="eyebrow">{tx("Preferences")}</p>
+              <h3>{tx("Windows settings")}</h3>
             </div>
             <Settings size={18} />
           </div>
           <div className="settings-list">
             <label className="setting-row">
-              <span>Theme</span>
+              <span>{tx("Theme")}</span>
               <select
                 value={settingsDocument.themeMode}
                 onChange={(event) => saveSettingsPatch({ themeMode: event.target.value as ThemeMode })}
               >
-                <option value="system">System</option>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
+                <option value="system">{tx("System")}</option>
+                <option value="light">{tx("Light")}</option>
+                <option value="dark">{tx("Dark")}</option>
               </select>
             </label>
             <label className="setting-row">
-              <span>Language</span>
+              <span>{tx("Language")}</span>
               <select
                 value={settingsDocument.language}
                 onChange={(event) => saveSettingsPatch({ language: event.target.value as AppLanguage })}
@@ -2032,7 +2331,7 @@ export function App() {
               </select>
             </label>
             <label className="setting-row">
-              <span>Refresh interval</span>
+              <span>{tx("Refresh interval")}</span>
               <select
                 value={settingsDocument.autoRefreshIntervalSecs}
                 onChange={(event) => saveSettingsPatch({ autoRefreshIntervalSecs: Number(event.target.value) })}
@@ -2043,11 +2342,11 @@ export function App() {
                 <option value={900}>15m</option>
                 <option value={1800}>30m</option>
                 <option value={3600}>1h</option>
-                <option value={0}>Off</option>
+                <option value={0}>{tx("Off")}</option>
               </select>
             </label>
             <label className="setting-row">
-              <span>Launch at login</span>
+              <span>{tx("Launch at login")}</span>
               <input
                 type="checkbox"
                 checked={settingsDocument.launchAtLogin}
@@ -2055,7 +2354,7 @@ export function App() {
               />
             </label>
             <label className="setting-row">
-              <span>Restore proxies on launch</span>
+              <span>{tx("Restore proxies on launch")}</span>
               <input
                 type="checkbox"
                 checked={settingsDocument.proxyAutoRestoreOnLaunch}
@@ -2063,7 +2362,7 @@ export function App() {
               />
             </label>
             <label className="setting-row">
-              <span>Minimize to tray on close</span>
+              <span>{tx("Minimize to tray on close")}</span>
               <input
                 type="checkbox"
                 checked={settingsDocument.minimizeToTrayOnClose}
@@ -2071,7 +2370,7 @@ export function App() {
               />
             </label>
             <label className="setting-row">
-              <span>Keep running in background</span>
+              <span>{tx("Keep running in background")}</span>
               <input
                 type="checkbox"
                 checked={settingsDocument.keepRunningInBackground}
@@ -2088,11 +2387,11 @@ export function App() {
                 disabled={diagnosticsExporting}
               >
                 <Download size={16} />
-                <span>{diagnosticsExporting ? "Exporting" : "Export diagnostics"}</span>
+                <span>{diagnosticsExporting ? tx("Exporting") : tx("Export diagnostics")}</span>
               </button>
               {diagnosticsExport ? (
                 <span>
-                  {diagnosticsExport.recentFiles.length} files · {diagnosticsExport.exportPath}
+                  {diagnosticsExport.recentFiles.length} {tx("files")} · {diagnosticsExport.exportPath}
                 </span>
               ) : null}
             </div>
@@ -2100,11 +2399,11 @@ export function App() {
           </div>
         </section>
 
-        <section className="panel compact-panel" hidden={activeSection !== "settings"}>
+        <section className="panel compact-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Release foundation</p>
-              <h3>Windows artifacts</h3>
+              <p className="eyebrow">{tx("Release foundation")}</p>
+              <h3>{tx("Windows artifacts")}</h3>
             </div>
           </div>
           <div className="target-row">
@@ -2114,15 +2413,15 @@ export function App() {
           </div>
           <div className="updater-row">
             <div>
-              <strong>{updaterStateLabel(updaterState)}</strong>
-              <span>{updaterDetail}</span>
+              <strong>{tx(updaterStateLabel(updaterState))}</strong>
+              <span>{tx(updaterDetail)}</span>
             </div>
-            <span className={`status ${updaterStatusClass(updaterState)}`}>{updaterStateLabel(updaterState)}</span>
+            <span className={`status ${updaterStatusClass(updaterState)}`}>{tx(updaterStateLabel(updaterState))}</span>
           </div>
           <div className="updater-actions">
             <button className="action-button" type="button" onClick={checkForUpdates} disabled={updaterBusy}>
               <RefreshCw size={16} />
-              <span>{updaterState === "checking" ? "Checking" : "Check"}</span>
+              <span>{updaterState === "checking" ? tx("Checking") : tx("Check")}</span>
             </button>
             <button
               className="action-button primary-action"
@@ -2131,11 +2430,11 @@ export function App() {
               disabled={!pendingUpdate || updaterBusy}
             >
               <Download size={16} />
-              <span>{updaterState === "downloading" ? "Downloading" : "Install"}</span>
+              <span>{updaterState === "downloading" ? tx("Downloading") : tx("Install")}</span>
             </button>
           </div>
           {updaterProgress ? (
-            <div className="updater-progress" aria-label="Update download progress">
+            <div className="updater-progress" aria-label={tx("Update download progress")}>
               <div>
                 <span style={{ width: `${updaterProgressPercent ?? 8}%` }} />
               </div>
@@ -2147,30 +2446,35 @@ export function App() {
           ) : null}
           {updaterError ? <div className="settings-error">{updaterError}</div> : null}
         </section>
+            </>
+          )}
+        </LazyMount>
 
-        <section className="panel" hidden={activeSection !== "usageStats"}>
+        <LazyMount when={activeSection === "usageStats"}>
+          {() => (
+        <section className="panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Usage archive</p>
-              <h3>Proxy token ledger</h3>
+              <p className="eyebrow">{tx("Usage archive")}</p>
+              <h3>{tx("Proxy token ledger")}</h3>
             </div>
             <BarChart3 size={18} />
           </div>
           <div className="usage-grid">
             <section className="usage-meter">
-              <span>Requests</span>
+              <span>{tx("Requests")}</span>
               <strong>{proxyUsageStats?.totals.requests.toLocaleString() ?? "0"}</strong>
             </section>
             <section className="usage-meter">
-              <span>Input</span>
+              <span>{tx("Input")}</span>
               <strong>{proxyUsageStats?.totals.inputTokens.toLocaleString() ?? "0"}</strong>
             </section>
             <section className="usage-meter">
-              <span>Output</span>
+              <span>{tx("Output")}</span>
               <strong>{proxyUsageStats?.totals.outputTokens.toLocaleString() ?? "0"}</strong>
             </section>
             <section className="usage-meter">
-              <span>Cache</span>
+              <span>{tx("Cache")}</span>
               <strong>
                 {(
                   (proxyUsageStats?.totals.cacheReadTokens ?? 0) +
@@ -2180,13 +2484,28 @@ export function App() {
             </section>
           </div>
           <div className="surface-list usage-list">
-            {(proxyUsageStats?.byModel.length ? proxyUsageStats.byModel.slice(0, 6) : [
-              { track: "codex", model: "No usage recorded", totals: { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } }
-            ] satisfies ProxyUsageStats["byModel"]).map((row) => (
+            {(proxyUsageStats?.byModel.length
+              ? proxyUsageStats.byModel.slice(0, 6)
+              : [
+                  {
+                    track: "codex",
+                    model: tx("No usage recorded"),
+                    totals: {
+                      requests: 0,
+                      inputTokens: 0,
+                      outputTokens: 0,
+                      cacheReadTokens: 0,
+                      cacheWriteTokens: 0
+                    }
+                  }
+                ] satisfies ProxyUsageStats["byModel"]
+            ).map((row) => (
               <article key={`${row.track}-${row.model}`} className="surface-row">
                 <div>
                   <strong>{row.model}</strong>
-                  <span>{proxyTrackLabel(row.track)} · {row.totals.requests.toLocaleString()} requests</span>
+                  <span>
+                    {tx(proxyTrackLabel(row.track))} · {row.totals.requests.toLocaleString()} {tx("Requests")}
+                  </span>
                 </div>
                 <span className="usage-total">
                   {(
@@ -2200,18 +2519,22 @@ export function App() {
             ))}
           </div>
         </section>
+          )}
+        </LazyMount>
 
-        <section className="panel compact-panel" hidden={!activeProxySection}>
+        <LazyMount when={activeProxySection}>
+          {() => (
+        <section className="panel compact-panel">
           <div className="panel-heading">
             <div>
-              <p className="eyebrow">Runtime health</p>
-              <h3>Proxy supervisor</h3>
+              <p className="eyebrow">{tx("Runtime health")}</p>
+              <h3>{tx("Proxy supervisor")}</h3>
             </div>
             <ServerCog size={18} />
           </div>
           <div className="settings-list proxy-control-form">
             <label className="setting-row">
-              <span>Track</span>
+              <span>{tx("Track")}</span>
               <select
                 value={activeProxyTrack}
                 onChange={(event) => {
@@ -2220,13 +2543,13 @@ export function App() {
               >
                 {(["codex", "claudeCode", "openCode"] satisfies ProxyTrack[]).map((track) => (
                   <option key={track} value={track}>
-                    {proxyTrackLabel(track)}
+                    {tx(proxyTrackLabel(track))}
                   </option>
                 ))}
               </select>
             </label>
             <label className="setting-row">
-              <span>Protocol</span>
+              <span>{tx("Protocol")}</span>
               <select
                 value={activeProxyDraft.protocol}
                 onChange={(event) =>
@@ -2236,14 +2559,14 @@ export function App() {
                 {(["openAiResponses", "openAiChatCompletions", "anthropicMessages", "passthrough"] satisfies ProxyProtocol[]).map(
                   (protocol) => (
                     <option key={protocol} value={protocol}>
-                      {proxyProtocolLabel(protocol)}
+                      {tx(proxyProtocolLabel(protocol))}
                     </option>
                   )
                 )}
               </select>
             </label>
             <label className="setting-row">
-              <span>Bind host</span>
+              <span>{tx("Bind host")}</span>
               <input
                 type="text"
                 value={activeProxyDraft.bindHost}
@@ -2251,7 +2574,7 @@ export function App() {
               />
             </label>
             <label className="setting-row">
-              <span>Port</span>
+              <span>{tx("Port")}</span>
               <input
                 type="number"
                 min={1}
@@ -2261,7 +2584,7 @@ export function App() {
               />
             </label>
             <label className="setting-row">
-              <span>Upstream URL</span>
+              <span>{tx("Upstream URL")}</span>
               <input
                 type="text"
                 value={activeProxyDraft.upstreamBaseUrl}
@@ -2269,7 +2592,7 @@ export function App() {
               />
             </label>
             <label className="setting-row">
-              <span>Upstream key</span>
+              <span>{tx("Upstream key")}</span>
               <input
                 type="password"
                 value={activeProxyDraft.upstreamApiKey}
@@ -2278,7 +2601,7 @@ export function App() {
               />
             </label>
             <label className="setting-row">
-              <span>Client key</span>
+              <span>{tx("Client key")}</span>
               <input
                 type="password"
                 value={activeProxyDraft.clientKey}
@@ -2287,7 +2610,7 @@ export function App() {
               />
             </label>
             <label className="setting-row">
-              <span>Model</span>
+              <span>{tx("Model")}</span>
               <input
                 type="text"
                 value={activeProxyDraft.defaultModel}
@@ -2302,7 +2625,7 @@ export function App() {
                 disabled={proxyActionBusy !== null || !activeProxyDraft.bindHost.trim() || !activeProxyPortValid}
               >
                 <Gauge size={16} />
-                <span>{proxyActionBusy === "preflight" ? "Checking" : "Preflight"}</span>
+                <span>{proxyActionBusy === "preflight" ? tx("Checking") : tx("Preflight")}</span>
               </button>
               <button
                 className="action-button primary-action"
@@ -2317,7 +2640,7 @@ export function App() {
                 }
               >
                 <Play size={16} />
-                <span>{proxyActionBusy === "start" ? "Starting" : "Start"}</span>
+                <span>{proxyActionBusy === "start" ? tx("Starting") : tx("Start")}</span>
               </button>
               <button
                 className="action-button"
@@ -2326,25 +2649,25 @@ export function App() {
                 disabled={proxyActionBusy !== null || !activeProxyRunning}
               >
                 <Square size={16} />
-                <span>{proxyActionBusy === "stop" ? "Stopping" : "Stop"}</span>
+                <span>{proxyActionBusy === "stop" ? tx("Stopping") : tx("Stop")}</span>
               </button>
             </div>
             {proxyPreflightResult ? (
               <article className="surface-row">
                 <div>
                   <strong>
-                    {proxyTrackLabel(proxyPreflightResult.track)} · {proxyPreflightResult.bindHost}:{proxyPreflightResult.port}
+                    {tx(proxyTrackLabel(proxyPreflightResult.track))} · {proxyPreflightResult.bindHost}:{proxyPreflightResult.port}
                   </strong>
                   <span>
                     {proxyPreflightResult.owner
                       ? `PID ${proxyPreflightResult.owner.processId}${
                           proxyPreflightResult.owner.imagePath ? ` · ${proxyPreflightResult.owner.imagePath}` : ""
                         }`
-                      : proxyPreflightResult.errorMessage ?? "Available"}
+                      : proxyPreflightResult.errorMessage ?? tx("Available")}
                   </span>
                 </div>
                 <span className={`status ${proxyPreflightResult.available ? "runtime-running" : "runtime-failed"}`}>
-                  {proxyPreflightResult.available ? "Free" : "Busy"}
+                  {proxyPreflightResult.available ? tx("Free") : tx("Busy")}
                 </span>
               </article>
             ) : null}
@@ -2359,14 +2682,16 @@ export function App() {
             ] satisfies ProxyHealth[]).map((health) => (
               <article key={health.track} className="surface-row">
                 <div>
-                  <strong>{proxyTrackLabel(health.track)}</strong>
-                  <span>{health.listeningPort ? `127.0.0.1:${health.listeningPort}` : "Not listening"}</span>
+                  <strong>{tx(proxyTrackLabel(health.track))}</strong>
+                  <span>{health.listeningPort ? `127.0.0.1:${health.listeningPort}` : tx("Not listening")}</span>
                 </div>
-                <span className={`status runtime-${health.state}`}>{runtimeStateLabel(health.state)}</span>
+                <span className={`status runtime-${health.state}`}>{tx(runtimeStateLabel(health.state))}</span>
               </article>
             ))}
           </div>
         </section>
+          )}
+        </LazyMount>
       </section>
     </main>
   );
