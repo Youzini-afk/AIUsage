@@ -48,6 +48,21 @@ type ProxyUsageArchiveSummary = {
   updatedAtEpochMs: number | null;
 };
 
+type TokenTotals = {
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+};
+
+type ProxyUsageStats = {
+  totals: TokenTotals;
+  byTrack: Array<{ track: ProxyHealth["track"]; totals: TokenTotals }>;
+  byModel: Array<{ track: ProxyHealth["track"]; model: string; totals: TokenTotals }>;
+  updatedAtEpochMs: number | null;
+};
+
 type CredentialSummary = {
   id: string;
   providerId: string;
@@ -143,6 +158,7 @@ export function App() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>(fallbackSnapshot);
   const [proxyHealth, setProxyHealth] = useState<ProxyHealth[]>([]);
   const [proxyArchives, setProxyArchives] = useState<ProxyUsageArchiveSummary[]>([]);
+  const [proxyUsageStats, setProxyUsageStats] = useState<ProxyUsageStats | null>(null);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [activeSection, setActiveSection] = useState("dashboard");
 
@@ -156,6 +172,9 @@ export function App() {
     invoke<ProxyUsageArchiveSummary[]>("proxy_usage_archives")
       .then(setProxyArchives)
       .catch(() => setProxyArchives([]));
+    invoke<ProxyUsageStats>("proxy_usage_stats")
+      .then(setProxyUsageStats)
+      .catch(() => setProxyUsageStats(null));
     invoke<CredentialSummary[]>("credentials")
       .then(setCredentials)
       .catch(() => setCredentials([]));
@@ -169,6 +188,12 @@ export function App() {
   const readyCount = snapshot.surfaces.filter((surface) => surface.status !== "planned").length;
   const runningProxyCount = proxyHealth.filter((health) => health.state === "running").length;
   const archivedUsageRows = proxyArchives.reduce((total, archive) => total + archive.records, 0);
+  const totalProxyTokens = proxyUsageStats
+    ? proxyUsageStats.totals.inputTokens +
+      proxyUsageStats.totals.outputTokens +
+      proxyUsageStats.totals.cacheReadTokens +
+      proxyUsageStats.totals.cacheWriteTokens
+    : 0;
 
   return (
     <main className="app-shell">
@@ -241,6 +266,10 @@ export function App() {
             <strong>{archivedUsageRows}</strong>
           </section>
           <section className="stat-tile">
+            <span>Proxy tokens</span>
+            <strong>{totalProxyTokens.toLocaleString()}</strong>
+          </section>
+          <section className="stat-tile">
             <span>Stored credentials</span>
             <strong>{credentials.length}</strong>
           </section>
@@ -277,6 +306,59 @@ export function App() {
           <div className="target-row">
             {snapshot.releaseTargets.map((target) => (
               <span key={target}>{target}</span>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <p className="eyebrow">Usage archive</p>
+              <h3>Proxy token ledger</h3>
+            </div>
+            <BarChart3 size={18} />
+          </div>
+          <div className="usage-grid">
+            <section className="usage-meter">
+              <span>Requests</span>
+              <strong>{proxyUsageStats?.totals.requests.toLocaleString() ?? "0"}</strong>
+            </section>
+            <section className="usage-meter">
+              <span>Input</span>
+              <strong>{proxyUsageStats?.totals.inputTokens.toLocaleString() ?? "0"}</strong>
+            </section>
+            <section className="usage-meter">
+              <span>Output</span>
+              <strong>{proxyUsageStats?.totals.outputTokens.toLocaleString() ?? "0"}</strong>
+            </section>
+            <section className="usage-meter">
+              <span>Cache</span>
+              <strong>
+                {(
+                  (proxyUsageStats?.totals.cacheReadTokens ?? 0) +
+                  (proxyUsageStats?.totals.cacheWriteTokens ?? 0)
+                ).toLocaleString()}
+              </strong>
+            </section>
+          </div>
+          <div className="surface-list usage-list">
+            {(proxyUsageStats?.byModel.length ? proxyUsageStats.byModel.slice(0, 6) : [
+              { track: "codex", model: "No usage recorded", totals: { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } }
+            ] satisfies ProxyUsageStats["byModel"]).map((row) => (
+              <article key={`${row.track}-${row.model}`} className="surface-row">
+                <div>
+                  <strong>{row.model}</strong>
+                  <span>{proxyTrackLabel(row.track)} · {row.totals.requests.toLocaleString()} requests</span>
+                </div>
+                <span className="usage-total">
+                  {(
+                    row.totals.inputTokens +
+                    row.totals.outputTokens +
+                    row.totals.cacheReadTokens +
+                    row.totals.cacheWriteTokens
+                  ).toLocaleString()}
+                </span>
+              </article>
             ))}
           </div>
         </section>

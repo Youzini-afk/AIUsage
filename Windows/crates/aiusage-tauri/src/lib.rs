@@ -11,7 +11,7 @@ pub use aiusage_proxy::{ProxyHealth, ProxyProtocol, ProxyRuntimeConfig, ProxyRun
 pub use aiusage_services::{
     ClaudeActivationRequest, CodexActivationRequest, CredentialSummary, ManagedConfigKind,
     ManagedConfigStatus, ManagedConfigTargetKind, OpenCodeActivationRequest,
-    ProxyUsageArchiveSummary, UpsertCredentialRequest,
+    ProxyUsageArchiveSummary, ProxyUsageStats, UpsertCredentialRequest,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -67,6 +67,10 @@ pub async fn stop_proxy_runtime(track: ProxyTrack) -> Result<ProxyHealth, ProxyE
 
 pub fn proxy_usage_archive_summaries() -> Result<Vec<ProxyUsageArchiveSummary>, ServiceError> {
     proxy_usage_archive_store().summaries()
+}
+
+pub fn proxy_usage_stats() -> Result<ProxyUsageStats, ServiceError> {
+    proxy_usage_archive_store().usage_stats()
 }
 
 pub fn credential_summaries() -> Result<Vec<CredentialSummary>, ServiceError> {

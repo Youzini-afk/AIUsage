@@ -4,7 +4,8 @@ use aiusage_tauri::{
     restore_claude_config, restore_codex_config, restore_opencode_config, save_credential,
     start_proxy_runtime, stop_proxy_runtime, ClaudeActivationRequest, CodexActivationRequest,
     CredentialSummary, DesktopSnapshot, ManagedConfigStatus, OpenCodeActivationRequest,
-    ProxyHealth, ProxyRuntimeConfig, ProxyTrack, ProxyUsageArchiveSummary, UpsertCredentialRequest,
+    ProxyHealth, ProxyRuntimeConfig, ProxyTrack, ProxyUsageArchiveSummary, ProxyUsageStats,
+    UpsertCredentialRequest,
 };
 
 #[tauri::command]
@@ -25,6 +26,11 @@ async fn proxy_statuses() -> Result<Vec<ProxyHealth>, String> {
 #[tauri::command]
 fn proxy_usage_archives() -> Result<Vec<ProxyUsageArchiveSummary>, String> {
     aiusage_tauri::proxy_usage_archive_summaries().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn proxy_usage_stats() -> Result<ProxyUsageStats, String> {
+    aiusage_tauri::proxy_usage_stats().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -103,6 +109,7 @@ pub fn run() {
             config_statuses,
             proxy_statuses,
             proxy_usage_archives,
+            proxy_usage_stats,
             credentials,
             save_provider_credential,
             delete_provider_credential,

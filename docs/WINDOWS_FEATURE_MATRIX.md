@@ -32,6 +32,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | Config takeover service | Claude/Codex/OpenCode native Windows paths, custom paths, sidecar `.aiusage.bak` backups, idempotent activation, restore, OpenCode JSONC parsing, and Tauri commands are implemented |
 | Proxy runtime | Async Rust passthrough supervisor starts/stops local listeners, exposes health through Tauri, validates client keys, normalizes `/v1` upstream paths, injects upstream auth, streams upstream responses, emits request/usage events, parses OpenAI/Anthropic usage shapes, and surfaces four-track health in the Windows UI |
 | Usage archive | Proxy usage events are persisted per track under `%APPDATA%\AIUsage\usage-archive\proxy-usage-<track>-v1.json`, permission-tightened through the Windows file guard, and summarized in the Windows UI |
+| Usage stats | Proxy usage archives aggregate into request/input/output/cache token totals with track/model breakdowns exposed through Tauri and displayed in the Windows UI |
 | Credential registry | Structured provider credentials are stored in Windows Credential Manager/DPAPI through the platform vault, exposed as secret-free summaries through Tauri, and counted in the Windows UI |
 | Packaging | Windows release workflow builds NSIS and MSI bundles, optionally signs artifacts with SignTool, emits SHA256 checksums, uploads artifacts, and publishes tag release assets |
 

@@ -125,6 +125,61 @@ pub struct ProxyUsageArchiveSummary {
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TokenTotals {
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+}
+
+impl TokenTotals {
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.cache_read_tokens)
+            .saturating_add(self.cache_write_tokens)
+    }
+
+    fn add_usage(&mut self, usage: &ProxyUsage) {
+        self.requests = self.requests.saturating_add(1);
+        self.input_tokens = self.input_tokens.saturating_add(usage.input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(usage.output_tokens);
+        self.cache_read_tokens = self
+            .cache_read_tokens
+            .saturating_add(usage.cache_read_tokens);
+        self.cache_write_tokens = self
+            .cache_write_tokens
+            .saturating_add(usage.cache_write_tokens);
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyUsageModelBreakdown {
+    pub track: aiusage_core::ProxyTrack,
+    pub model: String,
+    pub totals: TokenTotals,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyUsageTrackBreakdown {
+    pub track: aiusage_core::ProxyTrack,
+    pub totals: TokenTotals,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyUsageStats {
+    pub totals: TokenTotals,
+    pub by_track: Vec<ProxyUsageTrackBreakdown>,
+    pub by_model: Vec<ProxyUsageModelBreakdown>,
+    pub updated_at_epoch_ms: Option<u128>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CredentialVaultDocument {
     pub version: u32,
     pub credentials: Vec<StoredCredential>,
@@ -331,6 +386,64 @@ where
                 })
             })
             .collect()
+    }
+
+    pub fn usage_stats(&self) -> ServiceResult<ProxyUsageStats> {
+        let mut totals = TokenTotals::default();
+        let mut by_track =
+            std::collections::BTreeMap::<String, (aiusage_core::ProxyTrack, TokenTotals)>::new();
+        let mut by_model = std::collections::BTreeMap::<
+            (String, String),
+            (aiusage_core::ProxyTrack, String, TokenTotals),
+        >::new();
+        let mut updated_at_epoch_ms = None;
+
+        for track in aiusage_proxy::all_proxy_tracks() {
+            let path = self.archive_path(&track)?;
+            let archive = self.load_archive_at(&path)?;
+            if archive.updated_at_epoch_ms > 0 {
+                updated_at_epoch_ms = Some(
+                    updated_at_epoch_ms
+                        .unwrap_or(0)
+                        .max(archive.updated_at_epoch_ms),
+                );
+            }
+
+            for usage in archive.records {
+                totals.add_usage(&usage);
+                let track_key = archive_track_slug(&usage.track).to_string();
+                by_track
+                    .entry(track_key)
+                    .or_insert_with(|| (usage.track.clone(), TokenTotals::default()))
+                    .1
+                    .add_usage(&usage);
+
+                let model = usage.model.as_deref().unwrap_or("unknown").to_string();
+                let model_key = (archive_track_slug(&usage.track).to_string(), model.clone());
+                by_model
+                    .entry(model_key)
+                    .or_insert_with(|| (usage.track.clone(), model, TokenTotals::default()))
+                    .2
+                    .add_usage(&usage);
+            }
+        }
+
+        Ok(ProxyUsageStats {
+            totals,
+            by_track: by_track
+                .into_values()
+                .map(|(track, totals)| ProxyUsageTrackBreakdown { track, totals })
+                .collect(),
+            by_model: by_model
+                .into_values()
+                .map(|(track, model, totals)| ProxyUsageModelBreakdown {
+                    track,
+                    model,
+                    totals,
+                })
+                .collect(),
+            updated_at_epoch_ms,
+        })
     }
 
     fn archive_path(&self, track: &aiusage_core::ProxyTrack) -> ServiceResult<PathBuf> {
@@ -1119,6 +1232,49 @@ mod tests {
             .expect("codex summary");
         assert_eq!(summary.records, 1);
         assert!(summary.path.ends_with("proxy-usage-codex-v1.json"));
+    }
+
+    #[test]
+    fn proxy_usage_stats_aggregate_totals_tracks_and_models() {
+        let temp = TempDir::new().expect("tempdir");
+        let store = ProxyUsageArchiveStore::new(TestPaths::new(temp.path().to_path_buf()));
+        store
+            .append_usage(ProxyUsage {
+                track: aiusage_core::ProxyTrack::Codex,
+                node_id: "node-1".into(),
+                protocol: ProxyProtocol::OpenAiResponses,
+                model: Some("gpt-5".into()),
+                input_tokens: 10,
+                output_tokens: 4,
+                cache_read_tokens: 1,
+                cache_write_tokens: 0,
+                observed_at_epoch_ms: 42,
+            })
+            .expect("append usage");
+        store
+            .append_usage(ProxyUsage {
+                track: aiusage_core::ProxyTrack::ClaudeCode,
+                node_id: "node-2".into(),
+                protocol: ProxyProtocol::AnthropicMessages,
+                model: Some("claude-sonnet-4".into()),
+                input_tokens: 20,
+                output_tokens: 5,
+                cache_read_tokens: 0,
+                cache_write_tokens: 2,
+                observed_at_epoch_ms: 84,
+            })
+            .expect("append usage");
+
+        let stats = store.usage_stats().expect("stats");
+        assert_eq!(stats.totals.requests, 2);
+        assert_eq!(stats.totals.input_tokens, 30);
+        assert_eq!(stats.totals.output_tokens, 9);
+        assert_eq!(stats.totals.cache_read_tokens, 1);
+        assert_eq!(stats.totals.cache_write_tokens, 2);
+        assert_eq!(stats.updated_at_epoch_ms, Some(84));
+        assert_eq!(stats.by_track.len(), 2);
+        assert_eq!(stats.by_model.len(), 2);
+        assert!(stats.by_model.iter().any(|row| row.model == "gpt-5"));
     }
 
     #[test]
