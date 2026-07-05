@@ -20,7 +20,7 @@ use serde_json::json;
 use thiserror::Error;
 use tokio::{
     net::TcpListener,
-    sync::{oneshot, Mutex},
+    sync::{broadcast, oneshot, Mutex},
     task::JoinHandle,
 };
 
@@ -80,6 +80,27 @@ pub struct ProxyRequestLog {
     pub started_at_epoch_ms: u128,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyUsage {
+    pub track: ProxyTrack,
+    pub node_id: String,
+    pub protocol: ProxyProtocol,
+    pub model: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    pub observed_at_epoch_ms: u128,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "type", content = "payload")]
+pub enum ProxyRuntimeEvent {
+    Request(ProxyRequestLog),
+    Usage(ProxyUsage),
+}
+
 #[derive(Debug, Error)]
 pub enum ProxyError {
     #[error("invalid bind host: {0}")]
@@ -101,6 +122,7 @@ struct ProxyRuntimeContext {
     config: ProxyRuntimeConfig,
     client: reqwest::Client,
     local_addr: SocketAddr,
+    events: broadcast::Sender<ProxyRuntimeEvent>,
 }
 
 #[derive(Debug)]
@@ -111,14 +133,29 @@ struct RunningProxy {
     task: JoinHandle<()>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ProxySupervisor {
     running: Arc<Mutex<HashMap<ProxyTrack, RunningProxy>>>,
+    events: broadcast::Sender<ProxyRuntimeEvent>,
+}
+
+impl Default for ProxySupervisor {
+    fn default() -> Self {
+        let (events, _) = broadcast::channel(512);
+        Self {
+            running: Arc::new(Mutex::new(HashMap::new())),
+            events,
+        }
+    }
 }
 
 impl ProxySupervisor {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<ProxyRuntimeEvent> {
+        self.events.subscribe()
     }
 
     pub async fn start(&self, config: ProxyRuntimeConfig) -> ProxyResult<ProxyHealth> {
@@ -134,6 +171,7 @@ impl ProxySupervisor {
             config: config.clone(),
             client: reqwest::Client::new(),
             local_addr,
+            events: self.events.clone(),
         });
         let router = proxy_router(context);
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -354,7 +392,7 @@ async fn proxy_handler(
         };
 
     let status = upstream_response.status();
-    let _log = ProxyRequestLog {
+    let log = ProxyRequestLog {
         track: context.config.track.clone(),
         node_id: context.config.node_id.clone(),
         protocol: context.config.protocol.clone(),
@@ -363,8 +401,9 @@ async fn proxy_handler(
         status: status.as_u16(),
         started_at_epoch_ms,
     };
+    let _ = context.events.send(ProxyRuntimeEvent::Request(log));
 
-    stream_upstream_response(upstream_response)
+    stream_upstream_response(upstream_response, context).await
 }
 
 async fn send_upstream_request(
@@ -384,24 +423,58 @@ async fn send_upstream_request(
     request.send().await
 }
 
-fn stream_upstream_response(upstream_response: reqwest::Response) -> Response<Body> {
+async fn stream_upstream_response(
+    upstream_response: reqwest::Response,
+    context: Arc<ProxyRuntimeContext>,
+) -> Response<Body> {
     let status = upstream_response.status();
+    let is_sse = upstream_response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_ascii_lowercase().contains("text/event-stream"))
+        .unwrap_or(false);
     let mut builder = Response::builder().status(status);
     for (name, value) in upstream_response.headers() {
         if should_forward_response_header(name) {
             builder = builder.header(name, value);
         }
     }
-    let stream = upstream_response
-        .bytes_stream()
-        .map_err(std::io::Error::other);
-    builder.body(Body::from_stream(stream)).unwrap_or_else(|_| {
-        json_error(
+
+    if is_sse {
+        let mut scanner = SseUsageScanner::new(context);
+        let stream = upstream_response.bytes_stream().map_ok(move |chunk| {
+            scanner.push(&chunk);
+            chunk
+        });
+        return builder.body(Body::from_stream(stream)).unwrap_or_else(|_| {
+            json_error(
+                StatusCode::BAD_GATEWAY,
+                "response_build_failed",
+                "failed to build proxy response",
+            )
+        });
+    }
+
+    match upstream_response.bytes().await {
+        Ok(bytes) => {
+            if let Some(usage) = parse_usage_from_response_body(&bytes, &context.config) {
+                let _ = context.events.send(ProxyRuntimeEvent::Usage(usage));
+            }
+            builder.body(Body::from(bytes)).unwrap_or_else(|_| {
+                json_error(
+                    StatusCode::BAD_GATEWAY,
+                    "response_build_failed",
+                    "failed to build proxy response",
+                )
+            })
+        }
+        Err(error) => json_error(
             StatusCode::BAD_GATEWAY,
-            "response_build_failed",
-            "failed to build proxy response",
-        )
-    })
+            "upstream_body_error",
+            &error.to_string(),
+        ),
+    }
 }
 
 fn apply_upstream_auth(
@@ -494,6 +567,156 @@ fn json_error(status: StatusCode, code: &str, message: &str) -> Response<Body> {
         .into_response()
 }
 
+pub fn parse_usage_from_response_body(
+    body: &[u8],
+    config: &ProxyRuntimeConfig,
+) -> Option<ProxyUsage> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    parse_usage_from_value(&value, config)
+}
+
+pub fn parse_usage_from_sse_frame(frame: &str, config: &ProxyRuntimeConfig) -> Option<ProxyUsage> {
+    let data = sse_data_payload(frame)?;
+    if data == "[DONE]" {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(&data).ok()?;
+    parse_usage_from_value(&value, config)
+}
+
+fn parse_usage_from_value(
+    value: &serde_json::Value,
+    config: &ProxyRuntimeConfig,
+) -> Option<ProxyUsage> {
+    let usage = value
+        .get("usage")
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(|response| response.get("usage"))
+        })
+        .or_else(|| {
+            value
+                .get("message")
+                .and_then(|message| message.get("usage"))
+        })?;
+
+    let input_tokens = first_u64(
+        usage,
+        &[
+            "input_tokens",
+            "prompt_tokens",
+            "input",
+            "prompt",
+            "cache_creation_input_tokens",
+        ],
+    );
+    let output_tokens = first_u64(
+        usage,
+        &["output_tokens", "completion_tokens", "output", "completion"],
+    );
+    let cache_read_tokens = first_u64(
+        usage,
+        &[
+            "cache_read_input_tokens",
+            "cache_read_tokens",
+            "cached_tokens",
+        ],
+    )
+    .or_else(|| {
+        usage
+            .get("input_tokens_details")
+            .and_then(|details| first_u64(details, &["cached_tokens"]))
+    })
+    .unwrap_or(0);
+    let cache_write_tokens = first_u64(
+        usage,
+        &[
+            "cache_creation_input_tokens",
+            "cache_write_tokens",
+            "cache_creation_tokens",
+        ],
+    )
+    .unwrap_or(0);
+
+    let input_tokens = input_tokens.unwrap_or(0);
+    let output_tokens = output_tokens.unwrap_or(0);
+    if input_tokens == 0 && output_tokens == 0 && cache_read_tokens == 0 && cache_write_tokens == 0
+    {
+        return None;
+    }
+
+    Some(ProxyUsage {
+        track: config.track.clone(),
+        node_id: config.node_id.clone(),
+        protocol: config.protocol.clone(),
+        model: value
+            .get("model")
+            .and_then(|model| model.as_str())
+            .or_else(|| {
+                value
+                    .get("response")
+                    .and_then(|response| response.get("model"))
+                    .and_then(|model| model.as_str())
+            })
+            .map(ToOwned::to_owned)
+            .or_else(|| config.default_model.clone()),
+        input_tokens,
+        output_tokens,
+        cache_read_tokens,
+        cache_write_tokens,
+        observed_at_epoch_ms: now_epoch_ms(),
+    })
+}
+
+fn first_u64(value: &serde_json::Value, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|key| value.get(*key)?.as_u64())
+}
+
+fn sse_data_payload(frame: &str) -> Option<String> {
+    let mut lines = Vec::new();
+    for line in frame.lines() {
+        let line = line.trim_end_matches('\r');
+        if let Some(data) = line.strip_prefix("data:") {
+            lines.push(data.trim_start().to_string());
+        }
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+fn now_epoch_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
+}
+
+struct SseUsageScanner {
+    buffer: String,
+    context: Arc<ProxyRuntimeContext>,
+}
+
+impl SseUsageScanner {
+    fn new(context: Arc<ProxyRuntimeContext>) -> Self {
+        Self {
+            buffer: String::new(),
+            context,
+        }
+    }
+
+    fn push(&mut self, chunk: &[u8]) {
+        self.buffer
+            .push_str(&String::from_utf8_lossy(chunk).replace("\r\n", "\n"));
+        while let Some(index) = self.buffer.find("\n\n") {
+            let frame = self.buffer[..index].to_string();
+            self.buffer.drain(..index + 2);
+            if let Some(usage) = parse_usage_from_sse_frame(&frame, &self.context.config) {
+                let _ = self.context.events.send(ProxyRuntimeEvent::Usage(usage));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,6 +724,7 @@ mod tests {
 
     use axum::{routing::post, Json};
     use serde_json::Value;
+    use tokio::time::{timeout, Duration};
 
     #[test]
     fn foundation_health_tracks_all_proxy_families() {
@@ -526,6 +750,48 @@ mod tests {
             build_upstream_url("https://api.example.com", "/v1/messages").expect("url"),
             "https://api.example.com/v1/messages"
         );
+    }
+
+    #[test]
+    fn parses_usage_from_openai_and_anthropic_shapes() {
+        let config = test_config("http://127.0.0.1:9/v1");
+        let responses = parse_usage_from_response_body(
+            br#"{"model":"gpt-5","usage":{"input_tokens":10,"output_tokens":4}}"#,
+            &config,
+        )
+        .expect("responses usage");
+        assert_eq!(responses.input_tokens, 10);
+        assert_eq!(responses.output_tokens, 4);
+
+        let chat = parse_usage_from_response_body(
+            br#"{"usage":{"prompt_tokens":8,"completion_tokens":3,"input_tokens_details":{"cached_tokens":2}}}"#,
+            &config,
+        )
+        .expect("chat usage");
+        assert_eq!(chat.input_tokens, 8);
+        assert_eq!(chat.output_tokens, 3);
+        assert_eq!(chat.cache_read_tokens, 2);
+
+        let anthropic = parse_usage_from_response_body(
+            br#"{"usage":{"input_tokens":11,"output_tokens":6,"cache_creation_input_tokens":5}}"#,
+            &config,
+        )
+        .expect("anthropic usage");
+        assert_eq!(anthropic.input_tokens, 11);
+        assert_eq!(anthropic.cache_write_tokens, 5);
+    }
+
+    #[test]
+    fn parses_usage_from_sse_data_frame() {
+        let config = test_config("http://127.0.0.1:9/v1");
+        let usage = parse_usage_from_sse_frame(
+            "event: response.completed\ndata: {\"response\":{\"model\":\"gpt-5\",\"usage\":{\"input_tokens\":12,\"output_tokens\":7}}}\n",
+            &config,
+        )
+        .expect("sse usage");
+        assert_eq!(usage.model.as_deref(), Some("gpt-5"));
+        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.output_tokens, 7);
     }
 
     #[tokio::test]
@@ -586,6 +852,54 @@ mod tests {
         upstream.shutdown();
     }
 
+    #[tokio::test]
+    async fn proxy_emits_usage_event_for_json_response() {
+        let upstream = TestUpstream::start_with_response(json!({
+            "model": "gpt-5",
+            "usage": {"input_tokens": 13, "output_tokens": 8}
+        }))
+        .await;
+        let supervisor = ProxySupervisor::new();
+        let mut events = supervisor.subscribe();
+        let mut config = test_config(&format!("http://{}/v1", upstream.addr));
+        config.upstream_api_key = Some("upstream-key".into());
+        let health = supervisor.start(config).await.expect("proxy should start");
+        let port = health.listening_port.expect("port");
+
+        let response = reqwest::Client::new()
+            .post(format!("http://127.0.0.1:{port}/v1/responses"))
+            .bearer_auth("client-key")
+            .json(&json!({"model":"gpt-5"}))
+            .send()
+            .await
+            .expect("proxy request");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let mut observed_usage = None;
+        for _ in 0..4 {
+            match timeout(Duration::from_secs(2), events.recv())
+                .await
+                .expect("event timeout")
+                .expect("event")
+            {
+                ProxyRuntimeEvent::Usage(usage) => {
+                    observed_usage = Some(usage);
+                    break;
+                }
+                ProxyRuntimeEvent::Request(_) => {}
+            }
+        }
+        let usage = observed_usage.expect("usage event");
+        assert_eq!(usage.input_tokens, 13);
+        assert_eq!(usage.output_tokens, 8);
+
+        supervisor
+            .stop(ProxyTrack::Codex)
+            .await
+            .expect("proxy should stop");
+        upstream.shutdown();
+    }
+
     fn test_config(upstream_base_url: &str) -> ProxyRuntimeConfig {
         ProxyRuntimeConfig {
             track: ProxyTrack::Codex,
@@ -608,6 +922,8 @@ mod tests {
         body: String,
     }
 
+    type CaptureState = (Arc<Mutex<Option<oneshot::Sender<CapturedRequest>>>>, Value);
+
     struct TestUpstream {
         addr: SocketAddr,
         captured: oneshot::Receiver<CapturedRequest>,
@@ -616,6 +932,10 @@ mod tests {
 
     impl TestUpstream {
         async fn start() -> Self {
+            Self::start_with_response(json!({"ok": true})).await
+        }
+
+        async fn start_with_response(response: Value) -> Self {
             let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
                 .await
                 .expect("upstream bind");
@@ -625,7 +945,7 @@ mod tests {
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
             let router = Router::new()
                 .route("/v1/responses", post(capture_handler))
-                .with_state(capture_tx);
+                .with_state((capture_tx, response));
             tokio::spawn(async move {
                 let server = axum::serve(listener, router).with_graceful_shutdown(async {
                     let _ = shutdown_rx.await;
@@ -647,7 +967,7 @@ mod tests {
     }
 
     async fn capture_handler(
-        State(capture_tx): State<Arc<Mutex<Option<oneshot::Sender<CapturedRequest>>>>>,
+        State((capture_tx, response)): State<CaptureState>,
         request: Request<Body>,
     ) -> Json<Value> {
         let (parts, body) = request.into_parts();
@@ -667,6 +987,6 @@ mod tests {
                 body: String::from_utf8_lossy(&body).to_string(),
             });
         }
-        Json(json!({"ok": true}))
+        Json(response)
     }
 }
