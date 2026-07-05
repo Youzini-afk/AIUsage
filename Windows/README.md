@@ -16,7 +16,7 @@ For desktop development:
 pnpm tauri dev
 ```
 
-Release validation uses the manual checklist in `../docs/WINDOWS_QA_CHECKLIST.md`.
+Release validation uses the manual checklist in `../docs/WINDOWS_QA_CHECKLIST.md`. Support and recovery steps live in `../docs/WINDOWS_TROUBLESHOOTING.md`.
 
 ## Workspace Shape
 

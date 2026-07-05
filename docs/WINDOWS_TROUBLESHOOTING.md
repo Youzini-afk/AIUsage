@@ -1,0 +1,186 @@
+# Windows Troubleshooting
+
+This guide is for diagnosing Windows-specific AIUsage issues without exposing secrets. Prefer the Settings diagnostics export first, then use the targeted checks below.
+
+## Diagnostics Export
+
+Use **Settings > Export diagnostics** when filing a bug or comparing machines.
+
+The export is written to:
+
+```text
+%LOCALAPPDATA%\AIUsage\diagnostics\aiusage-diagnostics-*.json
+```
+
+The report contains path existence, file counts, byte totals, recent file metadata, and scan warnings. It does not include raw log bodies, CLI config bodies, credential values, cookies, or API keys.
+
+## App Does Not Launch
+
+Check:
+
+- The installed binary exists under the NSIS/MSI install location.
+- WebView2 Runtime is available on the machine.
+- `%LOCALAPPDATA%\AIUsage` is writable by the current user.
+- Windows Defender or enterprise policy did not quarantine the binary.
+- Reinstall with the latest NSIS setup, then retry from Start Menu.
+
+If launch still fails, collect the diagnostics export if possible and capture Windows Event Viewer application errors for `AIUsage`.
+
+## Tray Or Background Mode
+
+Check:
+
+- `Minimize to tray on close` is enabled in Settings.
+- `Keep running in background` is enabled when close-to-tray is expected.
+- The tray icon appears in the overflow area if Windows hides new tray icons.
+- Tray `Quit AIUsage` exits the process; closing the window should not be used as a force-quit path when background mode is enabled.
+
+If the app starts at login unexpectedly, disable `Launch at login` and verify the HKCU Run entry named `AIUsage` is removed:
+
+```powershell
+Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" | Select-Object AIUsage
+```
+
+## Proxy Port Conflicts
+
+The Windows environment panel shows default proxy port availability:
+
+| Track | Default port |
+| --- | --- |
+| Codex | `14399` |
+| Claude Code | `14400` |
+| OpenCode | `14401` |
+| Global | `14402` |
+
+If a port is busy, AIUsage reports the owning PID and image path where Windows exposes it.
+
+Manual check:
+
+```powershell
+Get-NetTCPConnection -LocalPort 14399 -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,OwningProcess
+```
+
+Then inspect the process:
+
+```powershell
+Get-Process -Id <PID> | Select-Object Id,ProcessName,Path
+```
+
+Only stop processes you recognize. AIUsage should only stop AIUsage-owned proxy listeners automatically.
+
+## Proxy Requests Fail
+
+Check:
+
+- The proxy track shows `Running` in Runtime health.
+- The CLI config points to the expected local base URL and port.
+- The request includes the expected client key when the track is configured with one.
+- The upstream base URL is reachable from the Windows machine.
+- System proxy settings are not forcing loopback traffic through an enterprise proxy.
+
+For a local health probe:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:14399/health
+```
+
+Use the track's actual port.
+
+## Credential Manager Issues
+
+AIUsage stores provider credentials in Windows Credential Manager / DPAPI-backed vault data.
+
+Check:
+
+- The current Windows user can open Credential Manager.
+- Enterprise policy does not block generic credentials.
+- Credential summaries in the UI never show secret values.
+- Deleting a credential from AIUsage removes or updates the corresponding vault item.
+
+Do not paste Credential Manager secret blobs into bug reports.
+
+## Config Activation Or Restore
+
+AIUsage uses sidecar backups with `.aiusage.bak`.
+
+Check:
+
+- The UI shows the target config path before activation/restore.
+- The backup path exists after activation when the original file existed.
+- Restore writes the original file bytes back or removes a managed-only file.
+- Native Windows and WSL targets are treated as separate choices.
+
+Typical native paths:
+
+```text
+%USERPROFILE%\.claude\settings.json
+%USERPROFILE%\.codex\config.toml
+%USERPROFILE%\.config\opencode\opencode.json
+%USERPROFILE%\.config\opencode\opencode.jsonc
+```
+
+If a restore fails, stop all related CLIs, copy the `.aiusage.bak` file back to the original path, then retry AIUsage restore.
+
+## Call Analytics Empty Or Partial
+
+Check the Windows environment panel and diagnostics export for source paths.
+
+Expected native locations:
+
+```text
+%USERPROFILE%\.claude.json
+%USERPROFILE%\.claude\settings.json
+%USERPROFILE%\.claude\projects
+%USERPROFILE%\.codex\config.toml
+%USERPROFILE%\.codex\sessions
+%USERPROFILE%\.codex\archived_sessions
+%USERPROFILE%\.config\opencode\opencode.json
+%LOCALAPPDATA%\opencode\opencode.db
+```
+
+Malformed JSON/JSONC/TOML should appear as warnings rather than crashing the UI.
+
+## Browser Profile Detection
+
+AIUsage detects browser profile metadata for Chrome, Edge, Brave, and Cursor. The environment panel shows profile names and candidate cookie database paths, but does not read cookie values.
+
+If profiles are missing:
+
+- Confirm the browser has been launched at least once.
+- Confirm the profile has a `Cookies` database.
+- Check whether an enterprise policy relocates browser user data.
+- Close the browser and retry if files are temporarily locked.
+
+## Installer Or Upgrade Issues
+
+Check:
+
+- NSIS and MSI artifacts come from the same version.
+- SHA256 checksums match the release file.
+- Signed releases pass `signtool verify /pa /v`.
+- Upgrade preserves `%APPDATA%\AIUsage`, `%LOCALAPPDATA%\AIUsage`, and Credential Manager entries.
+- Uninstall removes app binaries while leaving user data according to the documented policy.
+
+Manual artifact locations after local build:
+
+```text
+Windows\target\release\bundle\nsis
+Windows\target\release\bundle\msi
+```
+
+## What To Include In A Bug Report
+
+Include:
+
+- Windows version and architecture.
+- AIUsage version.
+- Installer type: NSIS or MSI.
+- The diagnostics export JSON.
+- The failing workflow and exact timestamp.
+- Screenshots of non-secret UI state when relevant.
+
+Do not include:
+
+- API keys, OAuth tokens, cookies, bearer tokens, or Credential Manager secret blobs.
+- Full CLI config files unless manually redacted.
+- Raw browser cookie databases.

@@ -210,5 +210,6 @@ Completion criteria:
 - `docs/WINDOWS_PORTING_ARCHITECTURE.md`
 - `docs/WINDOWS_FEATURE_MATRIX.md`
 - `docs/WINDOWS_QA_CHECKLIST.md`
+- `docs/WINDOWS_TROUBLESHOOTING.md`
 - `Windows/README.md`
 - `docs/WINDOWS_RELEASE_PLAYBOOK.md`
