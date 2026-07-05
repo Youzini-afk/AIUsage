@@ -104,8 +104,8 @@ jobs:
           [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
 
           $artifacts = @()
-          $artifacts += Get-ChildItem Windows/src-tauri/target/release -Filter "*.exe" -File -ErrorAction SilentlyContinue
-          $artifacts += Get-ChildItem Windows/src-tauri/target/release/bundle -Recurse -Include "*.exe","*.msi" -File
+          $artifacts += Get-ChildItem Windows/target/release -Filter "*.exe" -File -ErrorAction SilentlyContinue
+          $artifacts += Get-ChildItem Windows/target/release/bundle -Recurse -Include "*.exe","*.msi" -File
           if ($artifacts.Count -eq 0) { throw "No Windows artifacts found to sign" }
 
           foreach ($artifact in $artifacts) {
@@ -125,8 +125,8 @@ jobs:
           $dist = "dist/windows"
           New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-          $setup = Get-ChildItem Windows/src-tauri/target/release/bundle/nsis -Filter "*.exe" -File | Select-Object -First 1
-          $msi = Get-ChildItem Windows/src-tauri/target/release/bundle/msi -Filter "*.msi" -File | Select-Object -First 1
+          $setup = Get-ChildItem Windows/target/release/bundle/nsis -Filter "*.exe" -File | Select-Object -First 1
+          $msi = Get-ChildItem Windows/target/release/bundle/msi -Filter "*.msi" -File | Select-Object -First 1
           if ($null -eq $setup) { throw "NSIS setup.exe was not produced" }
           if ($null -eq $msi) { throw "MSI was not produced" }
 

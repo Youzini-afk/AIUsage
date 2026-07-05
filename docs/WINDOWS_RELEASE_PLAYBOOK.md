@@ -39,7 +39,7 @@ Unsigned workflow runs are allowed for non-release validation. Tag releases shou
 
 The workflow signs:
 
-- the release `.exe` binary under `Windows/src-tauri/target/release`;
+- the release `.exe` binary under `Windows/target/release`;
 - generated NSIS setup `.exe`;
 - generated MSI package.
 

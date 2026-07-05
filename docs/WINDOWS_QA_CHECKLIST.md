@@ -20,7 +20,7 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 - Run `cargo test --manifest-path Windows/Cargo.toml --workspace`.
 - Run `cargo clippy --manifest-path Windows/Cargo.toml --workspace --all-targets -- -D warnings`.
 - Build installers with `pnpm --dir Windows tauri build --bundles nsis,msi`.
-- Confirm both bundles exist under `Windows/target/release/bundle`.
+- Confirm the release binary and both bundles exist under `Windows/target/release`.
 
 ## Install And Launch
 
