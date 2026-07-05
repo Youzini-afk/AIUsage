@@ -15,5 +15,5 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 aiusage-tauri = { path = "../crates/aiusage-tauri" }
 serde = { version = "1", features = ["derive"] }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"

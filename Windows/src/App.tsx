@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
   BarChart3,
@@ -194,6 +195,8 @@ const sections = [
   { id: "settings", label: "Settings", icon: Settings }
 ];
 
+const sectionIds = new Set(sections.map((section) => section.id));
+
 const defaultAppSettings: AppSettingsDocument = {
   version: 1,
   themeMode: "system",
@@ -310,6 +313,28 @@ export function App() {
     invoke<CredentialSummary[]>("credentials")
       .then(setCredentials)
       .catch(() => setCredentials([]));
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    let unlisten: (() => void) | undefined;
+
+    listen<string>("aiusage-open-section", (event) => {
+      if (sectionIds.has(event.payload)) {
+        setActiveSection(event.payload);
+      }
+    }).then((listener) => {
+      if (mounted) {
+        unlisten = listener;
+      } else {
+        listener();
+      }
+    });
+
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
   }, []);
 
   const activeSurface = useMemo(
@@ -444,7 +469,12 @@ export function App() {
             <button type="button" title="Notifications" aria-label="Notifications">
               <Bell size={18} />
             </button>
-            <button type="button" title="Platform settings" aria-label="Platform settings">
+            <button
+              type="button"
+              title="Platform settings"
+              aria-label="Platform settings"
+              onClick={() => setActiveSection("settings")}
+            >
               <MonitorCog size={18} />
             </button>
           </div>

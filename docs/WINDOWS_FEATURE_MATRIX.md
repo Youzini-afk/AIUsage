@@ -36,7 +36,8 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | Call Analytics inventory | Windows service scans `%USERPROFILE%\.claude.json`, `%USERPROFILE%\.claude\settings.json`, `%USERPROFILE%\.claude\projects`, `%USERPROFILE%\.codex\config.toml`, `%USERPROFILE%\.codex\sessions`, `%USERPROFILE%\.codex\archived_sessions`, `%USERPROFILE%\.config\opencode\opencode.json[c]`, OpenCode data DB candidates, and user skill roots; results are exposed through Tauri and summarized in the Windows UI |
 | Call Analytics aggregation | Windows snapshot service aggregates Claude `tool_use`/`tool_result`, Codex `function_call`/`mcp_tool_call_end`, and OpenCode `part` table tool rows into day/source/kind/name entries with success and duration signals where available |
 | Credential registry | Structured provider credentials are stored in Windows Credential Manager/DPAPI through the platform vault, exposed as secret-free summaries through Tauri, and counted in the Windows UI |
-| App settings | `%APPDATA%\AIUsage\settings.json` stores non-secret Windows preferences, Tauri commands expose load/save, and launch-at-login syncs with the HKCU Run registry key through the Windows autostart adapter |
+| App settings | `%APPDATA%\AIUsage\settings.json` stores non-secret Windows preferences, Tauri commands expose load/save, launch-at-login syncs with the HKCU Run registry key, and tray lifecycle flags are consumed by the desktop shell |
+| Tray lifecycle | Tauri tray-icon support is enabled; the tray menu exposes Show AIUsage, Open Settings, and Quit AIUsage; left click/double click restores the main window; close hides the main window when `minimizeToTrayOnClose` or `keepRunningInBackground` is enabled; explicit Quit bypasses close-to-tray |
 | Packaging | Windows release workflow builds NSIS and MSI bundles, optionally signs artifacts with SignTool, emits SHA256 checksums, uploads artifacts, and publishes tag release assets |
 
 ## Provider Matrix
@@ -85,7 +86,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | Browser opening | Tauri opener / Windows shell |
 | Web login | System browser first; embedded WebView only when product requirements demand it |
 | Notifications | Tauri notification plugin or Windows notification integration |
-| Launch at login | HKCU Run registry adapter implemented; Tauri plugin can still replace it if richer tray lifecycle behavior requires |
+| Launch at login | HKCU Run registry adapter implemented and wired to Windows settings |
 | System proxy detection | WinHTTP/WinINET APIs |
 | Certificate trust | User certificate store first; admin/local-machine trust as explicit flow |
 | Process lifecycle | Rust supervisor, Windows Job Objects if needed |
@@ -97,7 +98,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 
 - All destructive config operations must show the target file path and backup state.
 - Windows/WSL target selection must be explicit for Claude, Codex, and OpenCode.
-- Tray background mode must behave predictably: close-to-tray, quit, show window, refresh, and proxy toggles.
+- Tray background mode must behave predictably: close-to-tray, quit, show window, refresh, and proxy toggles. Current shell support covers close-to-tray, show window, open Settings, and explicit quit; refresh/proxy tray shortcuts remain UX follow-up work.
 - Update notifications should be non-modal and match the current gentle-reminder philosophy.
 - Missing provider support must be visible as a clear status, not as silent empty data.
 

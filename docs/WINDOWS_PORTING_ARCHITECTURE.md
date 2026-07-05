@@ -116,14 +116,14 @@ Windows implementations:
 - Process/ports: Windows process APIs and IP Helper TCP tables.
 - Proxy settings: WinHTTP/WinINET current user proxy read.
 - Certificates: user or local-machine certificate store installation flow with clear elevation behavior.
-- Autostart: current-user HKCU Run registry adapter is implemented; Tauri plugin remains an option if richer tray lifecycle behavior requires it.
+- Autostart: current-user HKCU Run registry adapter is implemented; tray lifecycle remains in the Tauri desktop shell and consumes persisted app settings.
 
 ## Desktop Shell
 
 ### Tauri App Responsibilities
 
 - Main window and route shell.
-- Tray icon, tray status labels, context menu, and background behavior.
+- Tray icon, tray status labels, context menu, and background behavior. The current shell uses Tauri tray-icon support for Show AIUsage, Open Settings, Quit AIUsage, click-to-restore, settings-driven close-to-tray, and explicit quit bypass.
 - Tauri commands/events for provider refresh, proxy activation, config editing, and update checks.
 - WebView2-based UI rendering.
 - Installer/updater integration.

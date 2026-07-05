@@ -46,7 +46,7 @@ Deliverables:
 - Process/port inspector using Windows APIs.
 - System proxy reader.
 - Certificate generation/trust installer.
-- Autostart, shell open, notifications, and log export adapters. Launch-at-login now has a Windows HKCU Run adapter wired through Tauri settings commands.
+- Autostart, shell open, notifications, and log export adapters. Launch-at-login now has a Windows HKCU Run adapter wired through Tauri settings commands, and the desktop shell consumes persisted tray/background lifecycle settings.
 
 Completion criteria:
 
@@ -102,7 +102,7 @@ Deliverables:
 - Call Analytics.
 - Inbox.
 - Settings.
-- Tray menu and background behavior.
+- Tray menu and background behavior. The current Tauri shell implements Show AIUsage, Open Settings, Quit AIUsage, click-to-restore, close-to-tray, and explicit quit bypass; tray refresh/proxy shortcuts remain part of UI parity work.
 
 Completion criteria:
 
@@ -184,7 +184,7 @@ Completion criteria:
 - SignTool signature and timestamp verified.
 - Tauri update metadata generated and signed.
 - Installed app launches after fresh install and after upgrade.
-- Tray icon/menu works after reboot when autostart is enabled.
+- Tray icon/menu works after reboot when autostart is enabled, including close-to-tray, restore, Open Settings, and explicit Quit.
 - Credential vault survives upgrade.
 - Proxy activation/restoration tested for Claude, Codex, OpenCode, and global proxy.
 - Logs and diagnostics can be exported.
