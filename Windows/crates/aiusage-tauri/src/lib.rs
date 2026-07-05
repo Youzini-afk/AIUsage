@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 pub use aiusage_core::DesktopSnapshot;
 pub use aiusage_services::{
-    CodexActivationRequest, ManagedConfigKind, ManagedConfigStatus, ManagedConfigTargetKind,
-    OpenCodeActivationRequest,
+    ClaudeActivationRequest, CodexActivationRequest, ManagedConfigKind, ManagedConfigStatus,
+    ManagedConfigTargetKind, OpenCodeActivationRequest,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -48,6 +48,18 @@ pub fn build_phase_a_desktop_snapshot() -> TauriDesktopSnapshot {
 
 pub fn managed_config_statuses() -> Result<Vec<ManagedConfigStatus>, ServiceError> {
     managed_config_service().statuses()
+}
+
+pub fn activate_claude_config(
+    request: ClaudeActivationRequest,
+) -> Result<ManagedConfigStatus, ServiceError> {
+    managed_config_service().activate_claude(request)
+}
+
+pub fn restore_claude_config(
+    config_path: Option<std::path::PathBuf>,
+) -> Result<ManagedConfigStatus, ServiceError> {
+    managed_config_service().restore_claude(config_path)
 }
 
 pub fn activate_codex_config(
@@ -99,7 +111,10 @@ mod tests {
     #[test]
     fn managed_config_statuses_resolve_windows_paths() {
         let statuses = managed_config_statuses().expect("status resolution should succeed");
-        assert_eq!(statuses.len(), 2);
+        assert_eq!(statuses.len(), 3);
+        assert!(statuses
+            .iter()
+            .any(|status| status.config_path.contains(".claude")));
         assert!(statuses
             .iter()
             .any(|status| status.config_path.contains(".codex")));

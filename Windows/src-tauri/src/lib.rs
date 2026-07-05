@@ -1,7 +1,8 @@
 use aiusage_tauri::{
-    activate_codex_config, activate_opencode_config, build_phase_a_snapshot,
-    managed_config_statuses, restore_codex_config, restore_opencode_config, CodexActivationRequest,
-    DesktopSnapshot, ManagedConfigStatus, OpenCodeActivationRequest,
+    activate_claude_config, activate_codex_config, activate_opencode_config,
+    build_phase_a_snapshot, managed_config_statuses, restore_claude_config, restore_codex_config,
+    restore_opencode_config, ClaudeActivationRequest, CodexActivationRequest, DesktopSnapshot,
+    ManagedConfigStatus, OpenCodeActivationRequest,
 };
 
 #[tauri::command]
@@ -12,6 +13,18 @@ fn app_snapshot() -> DesktopSnapshot {
 #[tauri::command]
 fn config_statuses() -> Result<Vec<ManagedConfigStatus>, String> {
     managed_config_statuses().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn apply_claude_config(request: ClaudeActivationRequest) -> Result<ManagedConfigStatus, String> {
+    activate_claude_config(request).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn restore_claude_managed_config(
+    config_path: Option<std::path::PathBuf>,
+) -> Result<ManagedConfigStatus, String> {
+    restore_claude_config(config_path).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -47,6 +60,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_snapshot,
             config_statuses,
+            apply_claude_config,
+            restore_claude_managed_config,
             apply_codex_config,
             restore_codex_managed_config,
             apply_opencode_config,

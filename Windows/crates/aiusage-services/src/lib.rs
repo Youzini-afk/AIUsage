@@ -5,9 +5,10 @@ use std::{
 };
 
 use aiusage_core::{
-    inject_codex_managed_config, inject_opencode_managed_config_with_base,
-    opencode_has_managed_entries, parse_json_or_jsonc, strip_codex_managed_blocks,
-    strip_opencode_managed_entries, CodexManagedConfig, OpenCodeManagedNode,
+    claude_has_managed_entries, inject_claude_managed_settings, inject_codex_managed_config,
+    inject_opencode_managed_config_with_base, opencode_has_managed_entries, parse_json_or_jsonc,
+    strip_claude_managed_settings, strip_codex_managed_blocks, strip_opencode_managed_entries,
+    ClaudeManagedSettings, CodexManagedConfig, OpenCodeManagedNode,
 };
 use aiusage_platform::{AppPaths, PlatformError};
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,7 @@ pub type ServiceResult<T> = Result<T, ServiceError>;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ManagedConfigKind {
+    Claude,
     Codex,
     OpenCode,
 }
@@ -68,6 +70,14 @@ pub struct CodexActivationRequest {
     pub global_toml: String,
     #[serde(default)]
     pub node_toml: String,
+    #[serde(default)]
+    pub config_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeActivationRequest {
+    pub settings: ClaudeManagedSettings,
     #[serde(default)]
     pub config_path: Option<PathBuf>,
 }
@@ -109,7 +119,75 @@ where
     }
 
     pub fn statuses(&self) -> ServiceResult<Vec<ManagedConfigStatus>> {
-        Ok(vec![self.codex_status(None)?, self.opencode_status(None)?])
+        Ok(vec![
+            self.claude_status(None)?,
+            self.codex_status(None)?,
+            self.opencode_status(None)?,
+        ])
+    }
+
+    pub fn claude_status(
+        &self,
+        config_path: Option<PathBuf>,
+    ) -> ServiceResult<ManagedConfigStatus> {
+        let resolved = self.resolve_claude_target(config_path)?;
+        claude_status_for_path(resolved.path, resolved.target_kind)
+    }
+
+    pub fn activate_claude(
+        &self,
+        request: ClaudeActivationRequest,
+    ) -> ServiceResult<ManagedConfigStatus> {
+        validate_claude_settings(&request.settings)?;
+        let resolved = self.resolve_claude_target(request.config_path)?;
+        let backup_path = backup_path_for(&resolved.path);
+        let pristine = if backup_path.exists() {
+            let backup = read_text_if_exists(&backup_path)?.unwrap_or_else(|| "{}".into());
+            let root = parse_json_object(&backup, "Claude backup settings must be a JSON object")?;
+            strip_claude_managed_settings(&root)
+        } else if resolved.path.exists() {
+            let current_text = read_text_if_exists(&resolved.path)?.unwrap_or_else(|| "{}".into());
+            let current =
+                parse_json_object(&current_text, "Claude settings.json must be a JSON object")?;
+            copy_file_atomically(&resolved.path, &backup_path)?;
+            strip_claude_managed_settings(&current)
+        } else {
+            Value::Object(Default::default())
+        };
+
+        let next = inject_claude_managed_settings(&pristine, &request.settings);
+        write_json_atomically(&resolved.path, &next)?;
+        claude_status_for_path(resolved.path, resolved.target_kind)
+    }
+
+    pub fn restore_claude(
+        &self,
+        config_path: Option<PathBuf>,
+    ) -> ServiceResult<ManagedConfigStatus> {
+        let resolved = self.resolve_claude_target(config_path)?;
+        let backup_path = backup_path_for(&resolved.path);
+        if backup_path.exists() {
+            copy_file_atomically(&backup_path, &resolved.path)?;
+            fs::remove_file(&backup_path)?;
+            return claude_status_for_path(resolved.path, resolved.target_kind);
+        }
+
+        let Some(current_text) = read_text_if_exists(&resolved.path)? else {
+            return claude_status_for_path(resolved.path, resolved.target_kind);
+        };
+        let current =
+            parse_json_object(&current_text, "Claude settings.json must be a JSON object")?;
+        let clean = strip_claude_managed_settings(&current);
+        if clean
+            .as_object()
+            .map(|object| object.is_empty())
+            .unwrap_or(false)
+        {
+            remove_file_if_exists(&resolved.path)?;
+        } else {
+            write_json_atomically(&resolved.path, &clean)?;
+        }
+        claude_status_for_path(resolved.path, resolved.target_kind)
     }
 
     pub fn activate_codex(
@@ -254,6 +332,19 @@ where
         })
     }
 
+    fn resolve_claude_target(&self, config_path: Option<PathBuf>) -> ServiceResult<ResolvedTarget> {
+        Ok(match config_path {
+            Some(path) => ResolvedTarget {
+                path,
+                target_kind: ManagedConfigTargetKind::CustomPath,
+            },
+            None => ResolvedTarget {
+                path: self.paths.claude_home()?.join("settings.json"),
+                target_kind: ManagedConfigTargetKind::NativeWindows,
+            },
+        })
+    }
+
     fn resolve_opencode_target(
         &self,
         config_path: Option<PathBuf>,
@@ -282,23 +373,53 @@ struct ResolvedTarget {
     target_kind: ManagedConfigTargetKind,
 }
 
+fn claude_status_for_path(
+    path: PathBuf,
+    target_kind: ManagedConfigTargetKind,
+) -> ServiceResult<ManagedConfigStatus> {
+    let content = read_text_if_exists(&path)?;
+    let backup_path = backup_path_for(&path);
+    let backup_exists = backup_path.exists();
+    let (managed, parse_error) = match content.as_deref() {
+        Some(text) => match serde_json::from_str::<Value>(text) {
+            Ok(root) => (backup_exists || claude_has_managed_entries(&root), None),
+            Err(error) => (backup_exists, Some(error.to_string())),
+        },
+        None => (backup_exists, None),
+    };
+
+    Ok(ManagedConfigStatus {
+        kind: ManagedConfigKind::Claude,
+        target_kind,
+        config_path: display_path(&path)?,
+        backup_path: display_path(&backup_path)?,
+        config_exists: content.is_some(),
+        backup_exists,
+        managed,
+        uses_jsonc: false,
+        parse_error,
+    })
+}
+
 fn codex_status_for_path(
     path: PathBuf,
     target_kind: ManagedConfigTargetKind,
 ) -> ServiceResult<ManagedConfigStatus> {
     let content = read_text_if_exists(&path)?;
     let backup_path = backup_path_for(&path);
+    let backup_exists = backup_path.exists();
     Ok(ManagedConfigStatus {
         kind: ManagedConfigKind::Codex,
         target_kind,
         config_path: display_path(&path)?,
         backup_path: display_path(&backup_path)?,
         config_exists: content.is_some(),
-        backup_exists: backup_path.exists(),
-        managed: content
-            .as_deref()
-            .map(|content| content.contains("AIUSAGE-CODEX"))
-            .unwrap_or(false),
+        backup_exists,
+        managed: backup_exists
+            || content
+                .as_deref()
+                .map(|content| content.contains("AIUSAGE-CODEX"))
+                .unwrap_or(false),
         uses_jsonc: false,
         parse_error: None,
     })
@@ -310,12 +431,13 @@ fn opencode_status_for_path(
 ) -> ServiceResult<ManagedConfigStatus> {
     let content = read_text_if_exists(&path)?;
     let backup_path = backup_path_for(&path);
+    let backup_exists = backup_path.exists();
     let (managed, parse_error) = match content.as_deref() {
         Some(text) => match parse_json_or_jsonc(text) {
-            Ok(root) => (opencode_has_managed_entries(&root), None),
-            Err(error) => (false, Some(error.to_string())),
+            Ok(root) => (backup_exists || opencode_has_managed_entries(&root), None),
+            Err(error) => (backup_exists, Some(error.to_string())),
         },
-        None => (false, None),
+        None => (backup_exists, None),
     };
 
     Ok(ManagedConfigStatus {
@@ -324,7 +446,7 @@ fn opencode_status_for_path(
         config_path: display_path(&path)?,
         backup_path: display_path(&backup_path)?,
         config_exists: content.is_some(),
-        backup_exists: backup_path.exists(),
+        backup_exists,
         managed,
         uses_jsonc: path
             .extension()
@@ -333,6 +455,33 @@ fn opencode_status_for_path(
             .unwrap_or(false),
         parse_error,
     })
+}
+
+fn validate_claude_settings(settings: &ClaudeManagedSettings) -> ServiceResult<()> {
+    let has_any_value = [
+        &settings.base_url,
+        &settings.auth_token,
+        &settings.default_model,
+        &settings.opus_model,
+        &settings.sonnet_model,
+        &settings.haiku_model,
+        &settings.node_extra_ca_certs,
+    ]
+    .into_iter()
+    .any(|value| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+    });
+
+    if has_any_value {
+        Ok(())
+    } else {
+        Err(ServiceError::InvalidRequest(
+            "Claude managed settings include no values",
+        ))
+    }
 }
 
 fn validate_opencode_node(node: &OpenCodeManagedNode) -> ServiceResult<()> {
@@ -355,6 +504,15 @@ fn validate_opencode_node(node: &OpenCodeManagedNode) -> ServiceResult<()> {
         return Err(ServiceError::InvalidRequest("OpenCode models are required"));
     }
     Ok(())
+}
+
+fn parse_json_object(text: &str, error: &'static str) -> ServiceResult<Value> {
+    let value: Value = serde_json::from_str(text)?;
+    if value.is_object() {
+        Ok(value)
+    } else {
+        Err(ServiceError::InvalidRequest(error))
+    }
 }
 
 fn read_text_if_exists(path: &Path) -> ServiceResult<Option<String>> {
@@ -566,6 +724,60 @@ mod tests {
         let status = service.opencode_status(None).expect("status");
         assert!(status.parse_error.is_some());
         assert!(!status.managed);
+    }
+
+    #[test]
+    fn claude_activation_restores_original_settings_verbatim() {
+        let temp = TempDir::new().expect("tempdir");
+        let service = ManagedConfigService::new(TestPaths::new(temp.path().to_path_buf()));
+        let dir = temp.path().join(".claude");
+        fs::create_dir_all(&dir).expect("claude dir");
+        let config_path = dir.join("settings.json");
+        let original = "{\n  \"env\": {\"PATH\": \"keep\"},\n  \"model\": \"user-model\"\n}\n";
+        fs::write(&config_path, original).expect("seed settings");
+
+        let status = service
+            .activate_claude(ClaudeActivationRequest {
+                settings: ClaudeManagedSettings {
+                    base_url: Some("http://127.0.0.1:4315".into()),
+                    auth_token: Some("client-key".into()),
+                    default_model: Some("claude-sonnet-4".into()),
+                    ..Default::default()
+                },
+                config_path: None,
+            })
+            .expect("activate");
+        assert!(status.managed);
+        assert!(status.backup_exists);
+
+        let managed = fs::read_to_string(&config_path).expect("managed settings");
+        assert!(managed.contains("ANTHROPIC_BASE_URL"));
+        assert!(managed.contains("client-key"));
+
+        service.restore_claude(None).expect("restore");
+        assert_eq!(fs::read_to_string(config_path).expect("restored"), original);
+    }
+
+    #[test]
+    fn claude_restore_without_backup_strips_managed_values() {
+        let temp = TempDir::new().expect("tempdir");
+        let service = ManagedConfigService::new(TestPaths::new(temp.path().to_path_buf()));
+        let status = service
+            .activate_claude(ClaudeActivationRequest {
+                settings: ClaudeManagedSettings {
+                    base_url: Some("http://127.0.0.1:4315".into()),
+                    auth_token: Some("client-key".into()),
+                    default_model: Some("claude-sonnet-4".into()),
+                    ..Default::default()
+                },
+                config_path: None,
+            })
+            .expect("activate");
+        assert!(status.managed);
+        assert!(!status.backup_exists);
+
+        let restored = service.restore_claude(None).expect("restore");
+        assert!(!restored.config_exists);
     }
 
     fn node() -> OpenCodeManagedNode {

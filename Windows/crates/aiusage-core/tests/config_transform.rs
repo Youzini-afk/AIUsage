@@ -1,6 +1,8 @@
 use aiusage_core::{
-    inject_codex_managed_config, inject_opencode_managed_config, strip_codex_managed_blocks,
-    strip_opencode_managed_entries, CodexManagedConfig, OpenCodeManagedModel, OpenCodeManagedNode,
+    inject_claude_managed_settings, inject_codex_managed_config, inject_opencode_managed_config,
+    parse_json_or_jsonc, strip_claude_managed_settings, strip_codex_managed_blocks,
+    strip_opencode_managed_entries, ClaudeManagedSettings, CodexManagedConfig,
+    OpenCodeManagedModel, OpenCodeManagedNode,
 };
 use serde_json::json;
 
@@ -85,4 +87,57 @@ fn opencode_transform_injects_provider_and_strips_managed_entries() {
     assert!(stripped["provider"].get("anthropic").is_some());
     assert!(stripped["provider"].get("aiusage-main").is_none());
     assert!(stripped.get("model").is_none());
+}
+
+#[test]
+fn claude_transform_manages_env_keys_and_restores_user_settings() {
+    let original = json!({
+        "env": {
+            "PATH": "keep",
+            "ANTHROPIC_BASE_URL": "https://old.example"
+        },
+        "model": "old-model",
+        "permissions": {
+            "allow": ["Bash(ls)"]
+        }
+    });
+
+    let injected = inject_claude_managed_settings(
+        &original,
+        &ClaudeManagedSettings {
+            base_url: Some("http://127.0.0.1:4315".into()),
+            auth_token: Some("client-key".into()),
+            default_model: Some("claude-sonnet-4".into()),
+            sonnet_model: Some("claude-sonnet-4".into()),
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(injected["env"]["PATH"], "keep");
+    assert_eq!(
+        injected["env"]["ANTHROPIC_BASE_URL"],
+        "http://127.0.0.1:4315"
+    );
+    assert_eq!(injected["env"]["ANTHROPIC_AUTH_TOKEN"], "client-key");
+    assert_eq!(injected["model"], "claude-sonnet-4");
+
+    let stripped = strip_claude_managed_settings(&injected);
+    assert_eq!(stripped["env"]["PATH"], "keep");
+    assert!(stripped["env"].get("ANTHROPIC_BASE_URL").is_none());
+    assert!(stripped.get("model").is_none());
+}
+
+#[test]
+fn jsonc_parser_accepts_comments_and_trailing_commas() {
+    let parsed = parse_json_or_jsonc(
+        r#"{
+          // OpenCode accepts this style.
+          "provider": {
+            "anthropic": {},
+          },
+        }"#,
+    )
+    .expect("jsonc should parse");
+
+    assert!(parsed["provider"].get("anthropic").is_some());
 }
