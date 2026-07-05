@@ -3,13 +3,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use aiusage_tauri::{
     activate_claude_config, activate_codex_config, activate_opencode_config,
     app_settings as load_app_settings, build_phase_a_snapshot, credential_summaries,
-    delete_credential, managed_config_statuses, restore_claude_config, restore_codex_config,
-    restore_opencode_config, save_app_settings as persist_app_settings, save_credential,
-    start_proxy_runtime, stop_proxy_runtime, AppSettingsDocument, AppSettingsSnapshot,
-    CallAnalyticsInventorySnapshot, CallAnalyticsSnapshot, ClaudeActivationRequest,
-    CodexActivationRequest, CredentialSummary, DesktopSnapshot, ManagedConfigStatus,
-    OpenCodeActivationRequest, ProxyHealth, ProxyRuntimeConfig, ProxyTrack,
-    ProxyUsageArchiveSummary, ProxyUsageStats, UpsertCredentialRequest,
+    delete_credential, export_diagnostics as export_windows_diagnostics, managed_config_statuses,
+    restore_claude_config, restore_codex_config, restore_opencode_config,
+    save_app_settings as persist_app_settings, save_credential, start_proxy_runtime,
+    stop_proxy_runtime, AppSettingsDocument, AppSettingsSnapshot, CallAnalyticsInventorySnapshot,
+    CallAnalyticsSnapshot, ClaudeActivationRequest, CodexActivationRequest, CredentialSummary,
+    DesktopSnapshot, DiagnosticsExportSnapshot, ManagedConfigStatus, OpenCodeActivationRequest,
+    ProxyHealth, ProxyRuntimeConfig, ProxyTrack, ProxyUsageArchiveSummary, ProxyUsageStats,
+    UpsertCredentialRequest,
 };
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
@@ -70,6 +71,11 @@ fn app_settings() -> Result<AppSettingsSnapshot, String> {
 #[tauri::command]
 fn save_app_settings(settings: AppSettingsDocument) -> Result<AppSettingsSnapshot, String> {
     persist_app_settings(settings).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn export_diagnostics() -> Result<DiagnosticsExportSnapshot, String> {
+    export_windows_diagnostics().map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -249,6 +255,7 @@ pub fn run() {
             call_analytics_snapshot,
             app_settings,
             save_app_settings,
+            export_diagnostics,
             credentials,
             save_provider_credential,
             delete_provider_credential,

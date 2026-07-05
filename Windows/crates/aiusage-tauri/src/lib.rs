@@ -3,7 +3,7 @@ use aiusage_platform::AppPaths;
 use aiusage_proxy::{ProxyError, ProxyRuntimeEvent, ProxySupervisor};
 use aiusage_services::{
     AppSettingsService, CallAnalyticsInventoryService, CallAnalyticsService, CredentialRegistry,
-    ManagedConfigService, ServiceError,
+    DiagnosticsExportService, ManagedConfigService, ServiceError,
 };
 use aiusage_windows::{
     WindowsAppPaths, WindowsAutostartManager, WindowsCredentialVault, WindowsFilePermissionGuard,
@@ -16,8 +16,9 @@ pub use aiusage_proxy::{ProxyHealth, ProxyProtocol, ProxyRuntimeConfig, ProxyRun
 pub use aiusage_services::{
     AppLanguage, AppSettingsDocument, AppSettingsSnapshot, CallAnalyticsInventorySnapshot,
     CallAnalyticsSnapshot, ClaudeActivationRequest, CodexActivationRequest, CredentialSummary,
-    ManagedConfigKind, ManagedConfigStatus, ManagedConfigTargetKind, OpenCodeActivationRequest,
-    ProxyUsageArchiveSummary, ProxyUsageStats, ThemeMode, UpsertCredentialRequest,
+    DiagnosticsExportSnapshot, ManagedConfigKind, ManagedConfigStatus, ManagedConfigTargetKind,
+    OpenCodeActivationRequest, ProxyUsageArchiveSummary, ProxyUsageStats, ThemeMode,
+    UpsertCredentialRequest,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -95,6 +96,11 @@ pub fn save_app_settings(
     settings: AppSettingsDocument,
 ) -> Result<AppSettingsSnapshot, ServiceError> {
     app_settings_service().save(settings)
+}
+
+pub fn export_diagnostics() -> Result<DiagnosticsExportSnapshot, ServiceError> {
+    DiagnosticsExportService::with_permissions(WindowsAppPaths::new(), WindowsFilePermissionGuard)
+        .export()
 }
 
 pub fn credential_summaries() -> Result<Vec<CredentialSummary>, ServiceError> {

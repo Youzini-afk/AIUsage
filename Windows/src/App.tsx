@@ -6,6 +6,7 @@ import {
   Bell,
   Bot,
   Braces,
+  Download,
   Gauge,
   KeyRound,
   Layers3,
@@ -147,6 +148,30 @@ type AppSettingsSnapshot = {
   autostartError: string | null;
 };
 
+type DiagnosticsPathSummary = {
+  label: string;
+  path: string;
+  exists: boolean;
+  fileCount: number;
+  totalBytes: number;
+};
+
+type DiagnosticsFileSummary = {
+  label: string;
+  path: string;
+  bytes: number;
+  modifiedAtEpochMs: number | null;
+};
+
+type DiagnosticsExportSnapshot = {
+  version: number;
+  generatedAtEpochMs: number;
+  exportPath: string;
+  paths: DiagnosticsPathSummary[];
+  recentFiles: DiagnosticsFileSummary[];
+  warningMessages: string[];
+};
+
 type CredentialSummary = {
   id: string;
   providerId: string;
@@ -285,6 +310,9 @@ export function App() {
   const [callInventory, setCallInventory] = useState<CallAnalyticsInventorySnapshot | null>(null);
   const [callSnapshot, setCallSnapshot] = useState<CallAnalyticsSnapshot | null>(null);
   const [appSettings, setAppSettings] = useState<AppSettingsSnapshot | null>(null);
+  const [diagnosticsExport, setDiagnosticsExport] = useState<DiagnosticsExportSnapshot | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
+  const [diagnosticsExporting, setDiagnosticsExporting] = useState(false);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [activeSection, setActiveSection] = useState("dashboard");
 
@@ -428,6 +456,15 @@ export function App() {
     invoke<AppSettingsSnapshot>("save_app_settings", { settings: nextSettings })
       .then(setAppSettings)
       .catch(() => setAppSettings(previous));
+  }
+
+  function exportDiagnostics() {
+    setDiagnosticsExporting(true);
+    setDiagnosticsError(null);
+    invoke<DiagnosticsExportSnapshot>("export_diagnostics")
+      .then(setDiagnosticsExport)
+      .catch((error) => setDiagnosticsError(String(error)))
+      .finally(() => setDiagnosticsExporting(false));
   }
 
   return (
@@ -724,6 +761,23 @@ export function App() {
             </label>
             <div className="settings-path">{appSettings?.settingsPath || "%APPDATA%\\AIUsage\\settings.json"}</div>
             {appSettings?.autostartError ? <div className="settings-error">{appSettings.autostartError}</div> : null}
+            <div className="diagnostics-row">
+              <button
+                className="action-button"
+                type="button"
+                onClick={exportDiagnostics}
+                disabled={diagnosticsExporting}
+              >
+                <Download size={16} />
+                <span>{diagnosticsExporting ? "Exporting" : "Export diagnostics"}</span>
+              </button>
+              {diagnosticsExport ? (
+                <span>
+                  {diagnosticsExport.recentFiles.length} files · {diagnosticsExport.exportPath}
+                </span>
+              ) : null}
+            </div>
+            {diagnosticsError ? <div className="settings-error">{diagnosticsError}</div> : null}
           </div>
         </section>
 

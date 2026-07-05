@@ -61,6 +61,7 @@ Before a public release:
 - install the MSI on a clean Windows 11 VM;
 - launch AIUsage after install;
 - verify tray menu Show AIUsage, Open Settings, Quit AIUsage, close-to-tray, and restore behavior;
+- export diagnostics from Settings and confirm the report is metadata-only;
 - confirm Credential Manager entries can be created and deleted;
 - activate and restore Claude, Codex, and OpenCode managed configs using test paths first;
 - start a proxy runtime against a local test upstream and confirm request/usage archive rows;

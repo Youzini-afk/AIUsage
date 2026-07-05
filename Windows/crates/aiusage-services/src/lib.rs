@@ -4,6 +4,7 @@ use std::{
     fs,
     io::{self, BufRead},
     path::{Path, PathBuf},
+    time::UNIX_EPOCH,
 };
 
 use aiusage_core::{
@@ -40,6 +41,9 @@ pub type ServiceResult<T> = Result<T, ServiceError>;
 
 pub const PROXY_USAGE_ARCHIVE_VERSION: u32 = 1;
 pub const APP_SETTINGS_VERSION: u32 = 1;
+pub const DIAGNOSTICS_EXPORT_VERSION: u32 = 1;
+const DIAGNOSTICS_FILE_SCAN_LIMIT: usize = 5_000;
+const DIAGNOSTICS_RECENT_FILE_LIMIT: usize = 25;
 
 #[derive(Clone, Debug, Default)]
 pub struct NoopFilePermissionGuard;
@@ -142,6 +146,36 @@ pub struct AppSettingsSnapshot {
     pub settings_path: String,
     pub autostart_enabled: bool,
     pub autostart_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsPathSummary {
+    pub label: String,
+    pub path: String,
+    pub exists: bool,
+    pub file_count: usize,
+    pub total_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsFileSummary {
+    pub label: String,
+    pub path: String,
+    pub bytes: u64,
+    pub modified_at_epoch_ms: Option<u128>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticsExportSnapshot {
+    pub version: u32,
+    pub generated_at_epoch_ms: u128,
+    pub export_path: String,
+    pub paths: Vec<DiagnosticsPathSummary>,
+    pub recent_files: Vec<DiagnosticsFileSummary>,
+    pub warning_messages: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -476,6 +510,106 @@ where
 
     fn settings_path(&self) -> ServiceResult<PathBuf> {
         Ok(self.paths.app_config_dir()?.join("settings.json"))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct DiagnosticsExportService<P, G = NoopFilePermissionGuard> {
+    paths: P,
+    permissions: G,
+}
+
+impl<P> DiagnosticsExportService<P, NoopFilePermissionGuard>
+where
+    P: AppPaths,
+{
+    pub fn new(paths: P) -> Self {
+        Self {
+            paths,
+            permissions: NoopFilePermissionGuard,
+        }
+    }
+}
+
+impl<P, G> DiagnosticsExportService<P, G>
+where
+    P: AppPaths,
+    G: FilePermissionGuard,
+{
+    pub fn with_permissions(paths: P, permissions: G) -> Self {
+        Self { paths, permissions }
+    }
+
+    pub fn export(&self) -> ServiceResult<DiagnosticsExportSnapshot> {
+        let generated_at_epoch_ms = epoch_ms();
+        let app_config_dir = self.paths.app_config_dir()?;
+        let app_data_dir = self.paths.app_data_dir()?;
+        let app_cache_dir = self.paths.app_cache_dir()?;
+        let logs_dir = app_data_dir.join("logs");
+        let proxy_logs_dir = app_data_dir.join("proxy-logs");
+        let usage_archive_dir = app_config_dir.join("usage-archive");
+        let diagnostics_dir = app_data_dir.join("diagnostics");
+        fs::create_dir_all(&diagnostics_dir)?;
+
+        let export_path =
+            diagnostics_dir.join(format!("aiusage-diagnostics-{generated_at_epoch_ms}.json"));
+        let mut warning_messages = Vec::new();
+
+        let paths = [
+            ("App config", app_config_dir.clone()),
+            ("App data", app_data_dir.clone()),
+            ("Cache", app_cache_dir.clone()),
+            ("Logs", logs_dir.clone()),
+            ("Proxy logs", proxy_logs_dir.clone()),
+            ("Usage archive", usage_archive_dir.clone()),
+            ("Diagnostics", diagnostics_dir.clone()),
+        ]
+        .into_iter()
+        .map(|(label, path)| diagnostics_path_summary(label, &path, &mut warning_messages))
+        .collect::<ServiceResult<Vec<_>>>()?;
+
+        let mut recent_files = Vec::new();
+        collect_diagnostics_files(
+            "Settings",
+            &app_config_dir.join("settings.json"),
+            &mut recent_files,
+            &mut warning_messages,
+        )?;
+        collect_diagnostics_files(
+            "Usage archive",
+            &usage_archive_dir,
+            &mut recent_files,
+            &mut warning_messages,
+        )?;
+        collect_diagnostics_files("Logs", &logs_dir, &mut recent_files, &mut warning_messages)?;
+        collect_diagnostics_files(
+            "Proxy logs",
+            &proxy_logs_dir,
+            &mut recent_files,
+            &mut warning_messages,
+        )?;
+        recent_files.sort_by(|left, right| {
+            right
+                .modified_at_epoch_ms
+                .unwrap_or_default()
+                .cmp(&left.modified_at_epoch_ms.unwrap_or_default())
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        recent_files.truncate(DIAGNOSTICS_RECENT_FILE_LIMIT);
+
+        let snapshot = DiagnosticsExportSnapshot {
+            version: DIAGNOSTICS_EXPORT_VERSION,
+            generated_at_epoch_ms,
+            export_path: display_path(&export_path)?,
+            paths,
+            recent_files,
+            warning_messages,
+        };
+        write_json_atomically(&export_path, &serde_json::to_value(&snapshot)?)?;
+        self.permissions
+            .restrict_current_user(&export_path)
+            .map_err(ServiceError::Platform)?;
+        Ok(snapshot)
     }
 }
 
@@ -2895,6 +3029,144 @@ fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> ServiceResult<()> {
     Ok(())
 }
 
+fn diagnostics_path_summary(
+    label: &str,
+    path: &Path,
+    warning_messages: &mut Vec<String>,
+) -> ServiceResult<DiagnosticsPathSummary> {
+    let mut summary = DiagnosticsPathSummary {
+        label: label.to_string(),
+        path: display_path(path)?,
+        exists: path.exists(),
+        file_count: 0,
+        total_bytes: 0,
+    };
+    if !summary.exists {
+        return Ok(summary);
+    }
+
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(candidate) = stack.pop() {
+        let metadata = match fs::metadata(&candidate) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                warning_messages.push(format!(
+                    "Could not inspect {}: {error}",
+                    candidate.display()
+                ));
+                continue;
+            }
+        };
+
+        if metadata.is_file() {
+            summary.file_count += 1;
+            summary.total_bytes = summary.total_bytes.saturating_add(metadata.len());
+        } else if metadata.is_dir() {
+            let entries = match fs::read_dir(&candidate) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    warning_messages.push(format!(
+                        "Could not read directory {}: {error}",
+                        candidate.display()
+                    ));
+                    continue;
+                }
+            };
+            for entry in entries {
+                match entry {
+                    Ok(entry) => stack.push(entry.path()),
+                    Err(error) => {
+                        warning_messages.push(format!(
+                            "Could not read entry under {}: {error}",
+                            candidate.display()
+                        ));
+                    }
+                }
+            }
+        }
+
+        if summary.file_count >= DIAGNOSTICS_FILE_SCAN_LIMIT {
+            warning_messages.push(format!(
+                "Stopped scanning {label} after {DIAGNOSTICS_FILE_SCAN_LIMIT} files"
+            ));
+            break;
+        }
+    }
+
+    Ok(summary)
+}
+
+fn collect_diagnostics_files(
+    label: &str,
+    path: &Path,
+    files: &mut Vec<DiagnosticsFileSummary>,
+    warning_messages: &mut Vec<String>,
+) -> ServiceResult<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(candidate) = stack.pop() {
+        let metadata = match fs::metadata(&candidate) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                warning_messages.push(format!(
+                    "Could not inspect {}: {error}",
+                    candidate.display()
+                ));
+                continue;
+            }
+        };
+
+        if metadata.is_file() {
+            files.push(DiagnosticsFileSummary {
+                label: label.to_string(),
+                path: display_path(&candidate)?,
+                bytes: metadata.len(),
+                modified_at_epoch_ms: metadata.modified().ok().and_then(system_time_epoch_ms),
+            });
+        } else if metadata.is_dir() {
+            let entries = match fs::read_dir(&candidate) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    warning_messages.push(format!(
+                        "Could not read directory {}: {error}",
+                        candidate.display()
+                    ));
+                    continue;
+                }
+            };
+            for entry in entries {
+                match entry {
+                    Ok(entry) => stack.push(entry.path()),
+                    Err(error) => {
+                        warning_messages.push(format!(
+                            "Could not read entry under {}: {error}",
+                            candidate.display()
+                        ));
+                    }
+                }
+            }
+        }
+
+        if files.len() >= DIAGNOSTICS_FILE_SCAN_LIMIT {
+            warning_messages.push(format!(
+                "Stopped collecting diagnostic files after {DIAGNOSTICS_FILE_SCAN_LIMIT} files"
+            ));
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn system_time_epoch_ms(time: std::time::SystemTime) -> Option<u128> {
+    time.duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_millis())
+}
+
 fn copy_file_atomically(source: &Path, destination: &Path) -> ServiceResult<()> {
     let bytes = fs::read(source)?;
     write_bytes_atomically(destination, &bytes)
@@ -3073,6 +3345,51 @@ mod tests {
         .expect("settings json");
         assert!(stored.contains("\"themeMode\": \"dark\""));
         assert!(stored.contains("\"language\": \"zh\""));
+    }
+
+    #[test]
+    fn diagnostics_export_writes_secret_free_metadata_report() {
+        let temp = TempDir::new().expect("tempdir");
+        let paths = TestPaths::new(temp.path().to_path_buf());
+        let config_dir = paths.app_config_dir().expect("config dir");
+        let local_dir = paths.app_data_dir().expect("local data dir");
+        fs::create_dir_all(config_dir.join("usage-archive")).expect("usage archive dir");
+        fs::create_dir_all(local_dir.join("logs")).expect("logs dir");
+        fs::write(
+            config_dir.join("settings.json"),
+            r#"{"proxyAutoRestoreOnLaunch":false}"#,
+        )
+        .expect("settings file");
+        fs::write(
+            local_dir.join("logs").join("aiusage.log"),
+            "token=SHOULD_NOT_APPEAR_IN_DIAGNOSTICS",
+        )
+        .expect("log file");
+        fs::write(
+            config_dir
+                .join("usage-archive")
+                .join("proxy-usage-codex-v1.json"),
+            "{}",
+        )
+        .expect("archive file");
+
+        let service = DiagnosticsExportService::new(paths);
+        let snapshot = service.export().expect("diagnostics export");
+
+        assert_eq!(snapshot.version, DIAGNOSTICS_EXPORT_VERSION);
+        assert!(Path::new(&snapshot.export_path).exists());
+        assert!(snapshot
+            .paths
+            .iter()
+            .any(|path| path.label == "Logs" && path.exists && path.file_count >= 1));
+        assert!(snapshot
+            .recent_files
+            .iter()
+            .any(|file| file.path.ends_with("aiusage.log")));
+
+        let report = fs::read_to_string(&snapshot.export_path).expect("diagnostics report");
+        assert!(report.contains("aiusage.log"));
+        assert!(!report.contains("SHOULD_NOT_APPEAR_IN_DIAGNOSTICS"));
     }
 
     #[test]

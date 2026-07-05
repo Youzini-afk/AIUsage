@@ -157,6 +157,7 @@ The UI may be implemented in React/TypeScript, but the state machine should mirr
 | Usage archives | `%APPDATA%\AIUsage\usage-archive\*.json` |
 | Proxy logs | `%LOCALAPPDATA%\AIUsage\proxy-logs\*.json` |
 | Caches | `%LOCALAPPDATA%\AIUsage\cache\*` |
+| Diagnostics exports | `%LOCALAPPDATA%\AIUsage\diagnostics\aiusage-diagnostics-*.json` |
 | TLS CA/key material | `%LOCALAPPDATA%\AIUsage\tls\*`, DPAPI-protected where appropriate |
 | Codex config | Native target: `%USERPROFILE%\.codex\config.toml`; alternate `CODEX_HOME` supported |
 | Codex call sessions | `%USERPROFILE%\.codex\sessions\**\*.json[l]` and `%USERPROFILE%\.codex\archived_sessions\**\*.json[l]` |
@@ -166,6 +167,8 @@ The UI may be implemented in React/TypeScript, but the state machine should mirr
 | OpenCode call database inventory | `%LOCALAPPDATA%\opencode\opencode.db`, `%USERPROFILE%\.local\share\opencode\opencode.db`, `$XDG_DATA_HOME\opencode\opencode.db`, plus config-dir fallback |
 
 The Windows Call Analytics service emits the same core snapshot shape as the macOS engine: installed Skill/MCP inventory plus day/source/kind/name aggregated call entries. Claude and Codex read JSONL files directly; OpenCode copies `opencode.db` plus WAL/SHM sidecars to a temporary read-only SQLite snapshot before querying tool parts.
+
+The diagnostics export is intentionally metadata-only in the current Windows shell. It records path existence, file counts, byte totals, recent file metadata, and scan warnings, but does not include raw log bodies, CLI config bodies, credential values, cookies, or tokens.
 
 ## Config Takeover Semantics
 

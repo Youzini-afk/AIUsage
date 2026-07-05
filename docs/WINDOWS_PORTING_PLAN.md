@@ -46,7 +46,7 @@ Deliverables:
 - Process/port inspector using Windows APIs.
 - System proxy reader.
 - Certificate generation/trust installer.
-- Autostart, shell open, notifications, and log export adapters. Launch-at-login now has a Windows HKCU Run adapter wired through Tauri settings commands, and the desktop shell consumes persisted tray/background lifecycle settings.
+- Autostart, shell open, notifications, and log export adapters. Launch-at-login now has a Windows HKCU Run adapter wired through Tauri settings commands, the desktop shell consumes persisted tray/background lifecycle settings, and Settings can export a secret-free diagnostics metadata report.
 
 Completion criteria:
 
@@ -185,6 +185,7 @@ Completion criteria:
 - Tauri update metadata generated and signed.
 - Installed app launches after fresh install and after upgrade.
 - Tray icon/menu works after reboot when autostart is enabled, including close-to-tray, restore, Open Settings, and explicit Quit.
+- Settings diagnostics export creates a metadata report without raw secrets or log bodies.
 - Credential vault survives upgrade.
 - Proxy activation/restoration tested for Claude, Codex, OpenCode, and global proxy.
 - Logs and diagnostics can be exported.
