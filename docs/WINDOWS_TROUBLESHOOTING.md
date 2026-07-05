@@ -146,7 +146,7 @@ Check:
 - Native/custom Apply actions use the matching proxy draft port, client key, and model from the Proxy supervisor panel.
 - The backup path exists after activation when the original file existed.
 - Restore is enabled only when AIUsage detects managed content or a sidecar backup.
-- WSL restore remains disabled until explicit WSL activation support is enabled.
+- WSL Apply/Restore uses the selected distro UNC target and skips Windows ACL tightening.
 - Restore writes the original file bytes back or removes a managed-only file.
 - Native Windows and WSL targets are treated as separate choices.
 

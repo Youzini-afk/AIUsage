@@ -464,6 +464,9 @@ pub struct WindowsFilePermissionGuard;
 
 impl FilePermissionGuard for WindowsFilePermissionGuard {
     fn restrict_current_user(&self, path: &Path) -> PlatformResult<()> {
+        if is_wsl_unc_path(path) {
+            return Ok(());
+        }
         if !path.exists() {
             return Ok(());
         }
@@ -489,6 +492,11 @@ impl FilePermissionGuard for WindowsFilePermissionGuard {
             Err(PlatformError::InvalidData("icacls failed"))
         }
     }
+}
+
+fn is_wsl_unc_path(path: &Path) -> bool {
+    let path = path.to_string_lossy();
+    path.starts_with(r"\\wsl.localhost\") || path.starts_with(r"\\wsl$\")
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1038,6 +1046,19 @@ mod tests {
             .restrict_current_user(&path)
             .expect("icacls should restrict the temp file");
         fs::remove_file(path).expect("restricted file should remain removable by current user");
+    }
+
+    #[test]
+    fn file_permission_guard_skips_wsl_unc_paths() {
+        assert!(is_wsl_unc_path(Path::new(
+            r"\\wsl.localhost\Ubuntu\home\user\.codex\config.toml"
+        )));
+        assert!(is_wsl_unc_path(Path::new(
+            r"\\wsl$\Ubuntu\home\user\.codex\config.toml"
+        )));
+        assert!(!is_wsl_unc_path(Path::new(
+            r"C:\Users\user\.codex\config.toml"
+        )));
     }
 
     #[test]

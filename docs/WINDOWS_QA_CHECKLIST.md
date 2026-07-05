@@ -74,7 +74,7 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 - Confirm the Config takeover panel shows Claude, Codex, and OpenCode target paths, managed state, backup state, and parse warnings.
 - Use native Apply actions for Claude, Codex, and OpenCode after setting proxy drafts; confirm target files are created with local proxy URLs and managed markers.
 - Confirm restore actions are disabled when neither managed content nor backup exists.
-- On a machine with WSL, confirm the Config takeover panel shows WSL target rows as `WSL` and keeps WSL restore disabled until explicit WSL activation support is enabled.
+- On a machine with WSL, confirm the Config takeover panel shows WSL target rows as `WSL`, and Apply/Restore only writes the selected distro path.
 - Confirm native Windows and WSL targets are never silently mixed.
 - Confirm current native activation does not create or modify files under WSL distro homes.
 

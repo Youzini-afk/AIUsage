@@ -587,7 +587,7 @@ function managedConfigRestoreCommand(kind: ManagedConfigKind): string {
 }
 
 function canRestoreManagedConfig(status: ManagedConfigStatus): boolean {
-  return status.targetKind !== "wslDistribution" && (status.managed || status.backupExists);
+  return status.managed || status.backupExists;
 }
 
 function proxyTrackForManagedConfig(kind: ManagedConfigKind): ProxyTrack {
@@ -968,9 +968,6 @@ export function App() {
   }
 
   function canActivateManagedConfig(status: ManagedConfigStatus): boolean {
-    if (status.targetKind === "wslDistribution") {
-      return false;
-    }
     const draft = proxyDrafts[proxyTrackForManagedConfig(status.kind)];
     if (!draft.bindHost.trim() || !proxyDraftHasValidPort(draft)) {
       return false;
@@ -981,8 +978,8 @@ export function App() {
   function upsertManagedConfigStatus(updated: ManagedConfigStatus) {
     setManagedConfigStatuses((previous) =>
       previous.map((row) =>
-        row.kind === updated.kind && row.targetKind === updated.targetKind && row.configPath === updated.configPath
-          ? updated
+        row.kind === updated.kind && row.configPath === updated.configPath
+          ? { ...updated, targetKind: row.targetKind }
           : row
       )
     );
@@ -991,7 +988,7 @@ export function App() {
   function applyManagedConfig(status: ManagedConfigStatus) {
     const track = proxyTrackForManagedConfig(status.kind);
     const draft = proxyDrafts[track];
-    const configPath = status.targetKind === "customPath" ? status.configPath : null;
+    const configPath = status.targetKind === "nativeWindows" ? null : status.configPath;
     let command = "apply_codex_config";
     let request: unknown;
 
@@ -1048,7 +1045,7 @@ export function App() {
     setManagedConfigBusy(status.kind);
     setManagedConfigError(null);
     invoke<ManagedConfigStatus>(command, {
-      configPath: status.targetKind === "customPath" ? status.configPath : null
+      configPath: status.targetKind === "nativeWindows" ? null : status.configPath
     })
       .then(upsertManagedConfigStatus)
       .catch((error) => setManagedConfigError(formatTauriRuntimeError(error, "Config takeover")))
