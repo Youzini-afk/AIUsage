@@ -16,6 +16,8 @@ For desktop development:
 pnpm tauri dev
 ```
 
+Release validation uses the manual checklist in `../docs/WINDOWS_QA_CHECKLIST.md`.
+
 ## Workspace Shape
 
 ```text

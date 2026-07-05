@@ -2,6 +2,8 @@
 
 This playbook tracks the Windows packaging path for the Tauri/Rust product line.
 
+The manual release gate is [Windows QA Checklist](WINDOWS_QA_CHECKLIST.md).
+
 ## Release Workflow
 
 The Windows release workflow is `.github/workflows/windows-release.yml`.

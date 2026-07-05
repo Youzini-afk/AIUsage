@@ -209,6 +209,6 @@ Completion criteria:
 - `docs/WINDOWS_PORTING_RESEARCH.md`
 - `docs/WINDOWS_PORTING_ARCHITECTURE.md`
 - `docs/WINDOWS_FEATURE_MATRIX.md`
-- Future: `Windows/README.md`
-- Future: `docs/WINDOWS_RELEASE_PLAYBOOK.md`
-- Future: `docs/WINDOWS_QA_CHECKLIST.md`
+- `docs/WINDOWS_QA_CHECKLIST.md`
+- `Windows/README.md`
+- `docs/WINDOWS_RELEASE_PLAYBOOK.md`
