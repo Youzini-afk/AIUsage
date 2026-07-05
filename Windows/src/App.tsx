@@ -41,6 +41,13 @@ type ProxyHealth = {
   listeningPort: number | null;
 };
 
+type ProxyUsageArchiveSummary = {
+  track: ProxyHealth["track"];
+  path: string;
+  records: number;
+  updatedAtEpochMs: number | null;
+};
+
 const fallbackSnapshot: DesktopSnapshot = {
   appName: "AIUsage",
   phase: "Windows Phase A",
@@ -125,6 +132,7 @@ function proxyTrackLabel(track: ProxyHealth["track"]): string {
 export function App() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>(fallbackSnapshot);
   const [proxyHealth, setProxyHealth] = useState<ProxyHealth[]>([]);
+  const [proxyArchives, setProxyArchives] = useState<ProxyUsageArchiveSummary[]>([]);
   const [activeSection, setActiveSection] = useState("dashboard");
 
   useEffect(() => {
@@ -134,6 +142,9 @@ export function App() {
     invoke<ProxyHealth[]>("proxy_statuses")
       .then(setProxyHealth)
       .catch(() => setProxyHealth([]));
+    invoke<ProxyUsageArchiveSummary[]>("proxy_usage_archives")
+      .then(setProxyArchives)
+      .catch(() => setProxyArchives([]));
   }, []);
 
   const activeSurface = useMemo(
@@ -143,6 +154,7 @@ export function App() {
 
   const readyCount = snapshot.surfaces.filter((surface) => surface.status !== "planned").length;
   const runningProxyCount = proxyHealth.filter((health) => health.state === "running").length;
+  const archivedUsageRows = proxyArchives.reduce((total, archive) => total + archive.records, 0);
 
   return (
     <main className="app-shell">
@@ -209,6 +221,10 @@ export function App() {
             <strong>
               {runningProxyCount}/{proxyHealth.length || 4}
             </strong>
+          </section>
+          <section className="stat-tile">
+            <span>Usage archive rows</span>
+            <strong>{archivedUsageRows}</strong>
           </section>
         </div>
 

@@ -65,6 +65,7 @@ version = "0.1.0"
 dependencies = [
  "aiusage-core",
  "aiusage-platform",
+ "aiusage-proxy",
  "serde",
  "serde_json",
  "tempfile",
@@ -81,6 +82,7 @@ dependencies = [
  "aiusage-services",
  "aiusage-windows",
  "serde",
+ "tokio",
 ]
 
 [[package]]

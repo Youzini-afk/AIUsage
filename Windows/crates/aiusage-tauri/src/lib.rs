@@ -1,6 +1,6 @@
 use aiusage_core::phase_a_snapshot;
 use aiusage_platform::AppPaths;
-use aiusage_proxy::{ProxyError, ProxySupervisor};
+use aiusage_proxy::{ProxyError, ProxyRuntimeEvent, ProxySupervisor};
 use aiusage_services::{ManagedConfigService, ServiceError};
 use aiusage_windows::{WindowsAppPaths, WindowsFilePermissionGuard};
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,7 @@ pub use aiusage_core::{DesktopSnapshot, ProxyTrack};
 pub use aiusage_proxy::{ProxyHealth, ProxyProtocol, ProxyRuntimeConfig, ProxyRuntimeState};
 pub use aiusage_services::{
     ClaudeActivationRequest, CodexActivationRequest, ManagedConfigKind, ManagedConfigStatus,
-    ManagedConfigTargetKind, OpenCodeActivationRequest,
+    ManagedConfigTargetKind, OpenCodeActivationRequest, ProxyUsageArchiveSummary,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -50,15 +50,22 @@ pub fn build_phase_a_desktop_snapshot() -> TauriDesktopSnapshot {
 }
 
 pub async fn proxy_statuses() -> Vec<ProxyHealth> {
+    ensure_proxy_usage_archiver();
     proxy_supervisor().all_health().await
 }
 
 pub async fn start_proxy_runtime(config: ProxyRuntimeConfig) -> Result<ProxyHealth, ProxyError> {
+    ensure_proxy_usage_archiver();
     proxy_supervisor().start(config).await
 }
 
 pub async fn stop_proxy_runtime(track: ProxyTrack) -> Result<ProxyHealth, ProxyError> {
+    ensure_proxy_usage_archiver();
     proxy_supervisor().stop(track).await
+}
+
+pub fn proxy_usage_archive_summaries() -> Result<Vec<ProxyUsageArchiveSummary>, ServiceError> {
+    proxy_usage_archive_store().summaries()
 }
 
 pub fn managed_config_statuses() -> Result<Vec<ManagedConfigStatus>, ServiceError> {
@@ -108,6 +115,36 @@ fn managed_config_service() -> ManagedConfigService<WindowsAppPaths, WindowsFile
 fn proxy_supervisor() -> &'static ProxySupervisor {
     static SUPERVISOR: OnceLock<ProxySupervisor> = OnceLock::new();
     SUPERVISOR.get_or_init(ProxySupervisor::new)
+}
+
+fn ensure_proxy_usage_archiver() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    STARTED.get_or_init(|| {
+        let mut events = proxy_supervisor().subscribe();
+        tokio::spawn(async move {
+            let store = proxy_usage_archive_store();
+            loop {
+                match events.recv().await {
+                    Ok(ProxyRuntimeEvent::Usage(usage)) => {
+                        if let Err(error) = store.append_usage(usage) {
+                            eprintln!("AIUsage proxy usage archive write failed: {error}");
+                        }
+                    }
+                    Ok(ProxyRuntimeEvent::Request(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    });
+}
+
+fn proxy_usage_archive_store(
+) -> aiusage_services::ProxyUsageArchiveStore<WindowsAppPaths, WindowsFilePermissionGuard> {
+    aiusage_services::ProxyUsageArchiveStore::with_permissions(
+        WindowsAppPaths::new(),
+        WindowsFilePermissionGuard,
+    )
 }
 
 fn display_path(path: std::path::PathBuf) -> String {

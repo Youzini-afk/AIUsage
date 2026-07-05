@@ -13,3 +13,4 @@ aiusage-proxy.workspace = true
 aiusage-services.workspace = true
 aiusage-windows.workspace = true
 serde.workspace = true
+tokio.workspace = true

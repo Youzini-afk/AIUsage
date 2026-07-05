@@ -11,6 +11,7 @@ use aiusage_core::{
     ClaudeManagedSettings, CodexManagedConfig, OpenCodeManagedNode,
 };
 use aiusage_platform::{AppPaths, FilePermissionGuard, PlatformError, PlatformResult};
+use aiusage_proxy::ProxyUsage;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -30,6 +31,8 @@ pub enum ServiceError {
 }
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
+
+pub const PROXY_USAGE_ARCHIVE_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Default)]
 pub struct NoopFilePermissionGuard;
@@ -99,6 +102,106 @@ pub struct OpenCodeActivationRequest {
     pub common_settings: Option<Value>,
     #[serde(default)]
     pub config_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyUsageArchive {
+    pub version: u32,
+    pub updated_at_epoch_ms: u128,
+    pub records: Vec<ProxyUsage>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyUsageArchiveSummary {
+    pub track: aiusage_core::ProxyTrack,
+    pub path: String,
+    pub records: usize,
+    pub updated_at_epoch_ms: Option<u128>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProxyUsageArchiveStore<P, G = NoopFilePermissionGuard> {
+    paths: P,
+    permissions: G,
+}
+
+impl<P> ProxyUsageArchiveStore<P, NoopFilePermissionGuard>
+where
+    P: AppPaths,
+{
+    pub fn new(paths: P) -> Self {
+        Self {
+            paths,
+            permissions: NoopFilePermissionGuard,
+        }
+    }
+}
+
+impl<P, G> ProxyUsageArchiveStore<P, G>
+where
+    P: AppPaths,
+    G: FilePermissionGuard,
+{
+    pub fn with_permissions(paths: P, permissions: G) -> Self {
+        Self { paths, permissions }
+    }
+
+    pub fn append_usage(&self, usage: ProxyUsage) -> ServiceResult<ProxyUsageArchive> {
+        let path = self.archive_path(&usage.track)?;
+        let mut archive = self.load_archive_at(&path)?;
+        archive.updated_at_epoch_ms = usage.observed_at_epoch_ms;
+        archive.records.push(usage);
+        self.write_archive(&path, &archive)?;
+        Ok(archive)
+    }
+
+    pub fn summaries(&self) -> ServiceResult<Vec<ProxyUsageArchiveSummary>> {
+        aiusage_proxy::all_proxy_tracks()
+            .into_iter()
+            .map(|track| {
+                let path = self.archive_path(&track)?;
+                let archive = self.load_archive_at(&path)?;
+                Ok(ProxyUsageArchiveSummary {
+                    track,
+                    path: display_path(&path)?,
+                    records: archive.records.len(),
+                    updated_at_epoch_ms: (archive.updated_at_epoch_ms > 0)
+                        .then_some(archive.updated_at_epoch_ms),
+                })
+            })
+            .collect()
+    }
+
+    fn archive_path(&self, track: &aiusage_core::ProxyTrack) -> ServiceResult<PathBuf> {
+        Ok(self
+            .paths
+            .app_config_dir()?
+            .join("usage-archive")
+            .join(format!(
+                "proxy-usage-{}-v{PROXY_USAGE_ARCHIVE_VERSION}.json",
+                archive_track_slug(track)
+            )))
+    }
+
+    fn load_archive_at(&self, path: &Path) -> ServiceResult<ProxyUsageArchive> {
+        match read_text_if_exists(path)? {
+            Some(text) => Ok(serde_json::from_str(&text)?),
+            None => Ok(ProxyUsageArchive {
+                version: PROXY_USAGE_ARCHIVE_VERSION,
+                updated_at_epoch_ms: 0,
+                records: Vec::new(),
+            }),
+        }
+    }
+
+    fn write_archive(&self, path: &Path, archive: &ProxyUsageArchive) -> ServiceResult<()> {
+        write_json_atomically(path, &serde_json::to_value(archive)?)?;
+        self.permissions
+            .restrict_current_user(path)
+            .map_err(ServiceError::Platform)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -623,11 +726,21 @@ fn display_path(path: &Path) -> ServiceResult<String> {
         .ok_or_else(|| ServiceError::NonUtf8Path(path.to_path_buf()))
 }
 
+fn archive_track_slug(track: &aiusage_core::ProxyTrack) -> &'static str {
+    match track {
+        aiusage_core::ProxyTrack::ClaudeCode => "claude",
+        aiusage_core::ProxyTrack::Codex => "codex",
+        aiusage_core::ProxyTrack::OpenCode => "opencode",
+        aiusage_core::ProxyTrack::Global => "global",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use aiusage_core::OpenCodeManagedModel;
     use aiusage_platform::PlatformResult;
+    use aiusage_proxy::{ProxyProtocol, ProxyUsage};
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -768,6 +881,35 @@ mod tests {
         let status = service.opencode_status(None).expect("status");
         assert!(status.parse_error.is_some());
         assert!(!status.managed);
+    }
+
+    #[test]
+    fn proxy_usage_archive_appends_per_track_records() {
+        let temp = TempDir::new().expect("tempdir");
+        let store = ProxyUsageArchiveStore::new(TestPaths::new(temp.path().to_path_buf()));
+        let archive = store
+            .append_usage(ProxyUsage {
+                track: aiusage_core::ProxyTrack::Codex,
+                node_id: "node-1".into(),
+                protocol: ProxyProtocol::OpenAiResponses,
+                model: Some("gpt-5".into()),
+                input_tokens: 10,
+                output_tokens: 4,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                observed_at_epoch_ms: 42,
+            })
+            .expect("append usage");
+        assert_eq!(archive.records.len(), 1);
+
+        let summary = store
+            .summaries()
+            .expect("summaries")
+            .into_iter()
+            .find(|summary| summary.track == aiusage_core::ProxyTrack::Codex)
+            .expect("codex summary");
+        assert_eq!(summary.records, 1);
+        assert!(summary.path.ends_with("proxy-usage-codex-v1.json"));
     }
 
     #[test]
