@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { check, type DownloadEvent, type Update } from "@tauri-apps/plugin-updater";
 import {
   Activity,
   BarChart3,
@@ -13,6 +14,7 @@ import {
   MessageSquareText,
   MonitorCog,
   Network,
+  RefreshCw,
   Settings,
   ServerCog,
   TerminalSquare
@@ -230,6 +232,13 @@ type CredentialSummary = {
   updatedAtEpochMs: number;
 };
 
+type UpdaterState = "idle" | "checking" | "current" | "available" | "downloading" | "installing" | "installed" | "error";
+
+type UpdaterProgress = {
+  downloadedBytes: number;
+  contentLength: number | null;
+};
+
 const fallbackSnapshot: DesktopSnapshot = {
   appName: "AIUsage",
   phase: "Windows Phase A",
@@ -350,6 +359,62 @@ function callKindLabel(kind: CallAnalyticsKind): string {
   }
 }
 
+function updaterStateLabel(state: UpdaterState): string {
+  switch (state) {
+    case "checking":
+      return "Checking";
+    case "current":
+      return "Up to date";
+    case "available":
+      return "Update available";
+    case "downloading":
+      return "Downloading";
+    case "installing":
+      return "Installing";
+    case "installed":
+      return "Installer started";
+    case "error":
+      return "Unavailable";
+    default:
+      return "Ready";
+  }
+}
+
+function updaterStatusClass(state: UpdaterState): string {
+  switch (state) {
+    case "current":
+    case "installed":
+      return "complete";
+    case "available":
+    case "checking":
+    case "downloading":
+    case "installing":
+      return "inProgress";
+    case "error":
+      return "blocked";
+    default:
+      return "planned";
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${bytes} B`;
+}
+
+function formatUpdaterError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("invoke") && message.includes("undefined")) {
+    return "Updater is available in the packaged Windows app.";
+  }
+  return message;
+}
+
 export function App() {
   const [snapshot, setSnapshot] = useState<DesktopSnapshot>(fallbackSnapshot);
   const [platformEnvironment, setPlatformEnvironment] = useState<PlatformEnvironmentSnapshot | null>(null);
@@ -362,6 +427,10 @@ export function App() {
   const [diagnosticsExport, setDiagnosticsExport] = useState<DiagnosticsExportSnapshot | null>(null);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [diagnosticsExporting, setDiagnosticsExporting] = useState(false);
+  const [pendingUpdate, setPendingUpdate] = useState<Update | null>(null);
+  const [updaterState, setUpdaterState] = useState<UpdaterState>("idle");
+  const [updaterError, setUpdaterError] = useState<string | null>(null);
+  const [updaterProgress, setUpdaterProgress] = useState<UpdaterProgress | null>(null);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [activeSection, setActiveSection] = useState("dashboard");
 
@@ -416,6 +485,12 @@ export function App() {
       unlisten?.();
     };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      pendingUpdate?.close().catch(() => undefined);
+    };
+  }, [pendingUpdate]);
 
   const activeSurface = useMemo(
     () => snapshot.surfaces.find((surface) => surface.id === activeSection),
@@ -516,6 +591,16 @@ export function App() {
       { track: "global", bindHost: "127.0.0.1", port: 14402, available: true, owner: null, errorMessage: null }
     ] satisfies ProxyPortPreflight[]);
   const availablePlatformPaths = platformPathRows.filter((row) => !row.path.includes("%")).length;
+  const updaterBusy = updaterState === "checking" || updaterState === "downloading" || updaterState === "installing";
+  const updaterProgressPercent =
+    updaterProgress?.contentLength && updaterProgress.contentLength > 0
+      ? Math.min(100, Math.round((updaterProgress.downloadedBytes / updaterProgress.contentLength) * 100))
+      : null;
+  const updaterDetail = pendingUpdate
+    ? `Current ${pendingUpdate.currentVersion} · Available ${pendingUpdate.version}`
+    : updaterState === "current"
+      ? "Current installed build"
+      : "Signed Windows updater endpoint";
 
   function saveSettingsPatch(patch: Partial<AppSettingsDocument>) {
     const previous = appSettings;
@@ -538,6 +623,59 @@ export function App() {
       .then(setDiagnosticsExport)
       .catch((error) => setDiagnosticsError(String(error)))
       .finally(() => setDiagnosticsExporting(false));
+  }
+
+  async function checkForUpdates() {
+    setUpdaterState("checking");
+    setUpdaterError(null);
+    setUpdaterProgress(null);
+    setPendingUpdate(null);
+
+    try {
+      const update = await check({ timeout: 30000 });
+      setPendingUpdate(update);
+      setUpdaterState(update ? "available" : "current");
+    } catch (error) {
+      setPendingUpdate(null);
+      setUpdaterState("error");
+      setUpdaterError(formatUpdaterError(error));
+    }
+  }
+
+  async function installPendingUpdate() {
+    if (!pendingUpdate) {
+      return;
+    }
+
+    let downloadedBytes = 0;
+    let contentLength: number | null = null;
+    setUpdaterState("downloading");
+    setUpdaterError(null);
+    setUpdaterProgress({ downloadedBytes, contentLength });
+
+    try {
+      await pendingUpdate.downloadAndInstall((event: DownloadEvent) => {
+        switch (event.event) {
+          case "Started":
+            downloadedBytes = 0;
+            contentLength = event.data.contentLength ?? null;
+            setUpdaterProgress({ downloadedBytes, contentLength });
+            break;
+          case "Progress":
+            downloadedBytes += event.data.chunkLength;
+            setUpdaterProgress({ downloadedBytes, contentLength });
+            break;
+          case "Finished":
+            setUpdaterState("installing");
+            break;
+        }
+      });
+      setUpdaterState("installed");
+      setPendingUpdate(null);
+    } catch (error) {
+      setUpdaterState("error");
+      setUpdaterError(formatUpdaterError(error));
+    }
   }
 
   return (
@@ -955,6 +1093,40 @@ export function App() {
               <span key={target}>{target}</span>
             ))}
           </div>
+          <div className="updater-row">
+            <div>
+              <strong>{updaterStateLabel(updaterState)}</strong>
+              <span>{updaterDetail}</span>
+            </div>
+            <span className={`status ${updaterStatusClass(updaterState)}`}>{updaterStateLabel(updaterState)}</span>
+          </div>
+          <div className="updater-actions">
+            <button className="action-button" type="button" onClick={checkForUpdates} disabled={updaterBusy}>
+              <RefreshCw size={16} />
+              <span>{updaterState === "checking" ? "Checking" : "Check"}</span>
+            </button>
+            <button
+              className="action-button primary-action"
+              type="button"
+              onClick={installPendingUpdate}
+              disabled={!pendingUpdate || updaterBusy}
+            >
+              <Download size={16} />
+              <span>{updaterState === "downloading" ? "Downloading" : "Install"}</span>
+            </button>
+          </div>
+          {updaterProgress ? (
+            <div className="updater-progress" aria-label="Update download progress">
+              <div>
+                <span style={{ width: `${updaterProgressPercent ?? 8}%` }} />
+              </div>
+              <strong>
+                {formatBytes(updaterProgress.downloadedBytes)}
+                {updaterProgress.contentLength ? ` / ${formatBytes(updaterProgress.contentLength)}` : ""}
+              </strong>
+            </div>
+          ) : null}
+          {updaterError ? <div className="settings-error">{updaterError}</div> : null}
         </section>
 
         <section className="panel">

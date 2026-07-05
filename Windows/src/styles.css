@@ -298,6 +298,69 @@ nav {
   font-weight: 650;
 }
 
+.updater-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 58px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e3e9ec;
+  border-radius: 8px;
+  background: #fbfcfc;
+}
+
+.updater-row div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.updater-row div span {
+  overflow-wrap: anywhere;
+  color: #66737f;
+  font-size: 0.78rem;
+}
+
+.updater-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.primary-action {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.updater-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  color: #66737f;
+  font-size: 0.78rem;
+}
+
+.updater-progress div {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e3e9ec;
+}
+
+.updater-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #0f766e;
+}
+
 .usage-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -436,6 +499,16 @@ nav {
 
   .diagnostics-row {
     align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .updater-row,
+  .updater-progress {
+    align-items: flex-start;
+    grid-template-columns: 1fr;
+  }
+
+  .updater-row {
     flex-direction: column;
   }
 }

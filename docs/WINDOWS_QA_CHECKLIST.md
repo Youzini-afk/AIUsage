@@ -21,6 +21,7 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 - Run `cargo clippy --manifest-path Windows/Cargo.toml --workspace --all-targets -- -D warnings`.
 - Build installers with `pnpm --dir Windows tauri build --bundles nsis,msi`.
 - Confirm the release binary and both bundles exist under `Windows/target/release`.
+- For signed release rehearsal, confirm `WINDOWS_CERTIFICATE_BASE64`, `TAURI_SIGNING_PRIVATE_KEY`, and `TAURI_SIGNING_PUBLIC_KEY` are configured in CI.
 
 ## Install And Launch
 
@@ -103,11 +104,22 @@ This checklist is the manual release gate for the Windows Tauri/Rust product lin
 - Verify signed artifacts with SignTool when signing secrets are configured.
 - Confirm SHA256 checksums match published release assets.
 
+## Updater
+
+- Confirm tag release artifacts include `AIUsage-<version>-windows-x64-setup.exe.sig`, `AIUsage-<version>-windows-x64.msi.sig`, and `latest.json` when updater secrets are configured.
+- Confirm `latest.json` contains a valid `windows-x86_64` platform entry, an HTTPS URL, and an inline signature string.
+- Install the previous signed Windows release.
+- Use the Windows artifacts panel `Check` action and confirm the new version is detected.
+- Use `Install` and confirm Windows exits AIUsage before installer handoff.
+- Relaunch after update and confirm the installed version, settings, credentials, usage archives, and tray behavior survived the upgrade.
+- Confirm offline or unavailable updater endpoint errors are shown in the UI without blocking normal app launch.
+
 ## Blocker Rules
 
 - Any plaintext secret in app-owned JSON is a release blocker.
 - Any config takeover path that cannot restore original bytes is a release blocker.
 - Any tray `Quit` action that leaves the app running is a release blocker.
 - Any installer that cannot upgrade without losing credentials/settings is a release blocker.
+- Any updater-enabled release missing `.sig` files or a valid `latest.json` is a release blocker.
 - Any proxy mode that loses usage accounting for normal success responses is a release blocker.
 - Any UI route that silently hides unsupported provider state is a release blocker.

@@ -18,7 +18,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | Inbox | Shipped | Full parity | Same message/read-state model |
 | Settings | Shipped | Full parity | Windows-specific autostart, tray, paths, update, certificates |
 | Tray/menu bar | Shipped | Full parity | Windows tray, context menu, background behavior |
-| Auto-update | Sparkle | Tauri updater | Separate signed update feed/metadata |
+| Auto-update | Sparkle | Tauri updater | Signed update artifacts, static manifest, and in-app check/install UI |
 | Installer | DMG/ZIP | NSIS + MSI | Signed, upgrade-safe, uninstall-safe |
 
 ## Current Windows Implementation Checkpoints
@@ -41,7 +41,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | App settings | `%APPDATA%\AIUsage\settings.json` stores non-secret Windows preferences, Tauri commands expose load/save, launch-at-login syncs with the HKCU Run registry key, and tray lifecycle flags are consumed by the desktop shell |
 | Tray lifecycle | Tauri tray-icon support is enabled; the tray menu exposes Show AIUsage, Open Settings, and Quit AIUsage; left click/double click restores the main window; close hides the main window when `minimizeToTrayOnClose` or `keepRunningInBackground` is enabled; explicit Quit bypasses close-to-tray |
 | Diagnostics export | Settings can export a secret-free diagnostics metadata JSON under `%LOCALAPPDATA%\AIUsage\diagnostics`, covering app/log/archive path status, file counts, byte totals, recent file metadata, and scan warnings without raw log/config contents |
-| Packaging | Windows release workflow builds NSIS and MSI bundles, optionally signs artifacts with SignTool, emits SHA256 checksums, uploads artifacts, and publishes tag release assets |
+| Packaging | Windows release workflow builds NSIS and MSI bundles, optionally injects Windows code signing into Tauri bundling, optionally emits updater `.sig` files plus `latest.json`, verifies Authenticode signatures, emits SHA256 checksums, uploads artifacts, and publishes tag release assets |
 
 ## Provider Matrix
 
@@ -94,7 +94,7 @@ This matrix tracks target parity for the Windows product line. "Target" means th
 | Certificate trust | User certificate store first; admin/local-machine trust as explicit flow |
 | Process lifecycle | Rust supervisor, Windows Job Objects if needed |
 | Orphan cleanup | Only AIUsage-owned helper/process instances |
-| Auto update | Tauri updater, signed metadata |
+| Auto update | Tauri updater plugin, signed artifacts, static `latest.json`, Windows passive install mode |
 | Crash/log diagnostics | `%LOCALAPPDATA%\AIUsage\logs`, `%LOCALAPPDATA%\AIUsage\proxy-logs`, and Settings diagnostics metadata export |
 
 ## UX Parity Requirements

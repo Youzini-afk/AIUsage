@@ -21,6 +21,11 @@ jobs:
       WINDOWS_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_BASE64 }}
       WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
       WINDOWS_TIMESTAMP_URL: http://timestamp.digicert.com
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      TAURI_SIGNING_PUBLIC_KEY: ${{ vars.TAURI_SIGNING_PUBLIC_KEY || secrets.TAURI_SIGNING_PUBLIC_KEY }}
+      WINDOWS_UPDATE_ENDPOINT: ${{ vars.WINDOWS_UPDATE_ENDPOINT }}
+      WINDOWS_UPDATE_BASE_URL: ${{ vars.WINDOWS_UPDATE_BASE_URL }}
 
     steps:
       - name: Checkout
@@ -92,31 +97,107 @@ jobs:
       - name: Test Rust workspace
         run: cargo test --manifest-path Windows/Cargo.toml --workspace
 
-      - name: Build Tauri bundles
-        working-directory: Windows
-        run: pnpm tauri build --bundles nsis,msi
-
-      - name: Sign Windows artifacts
+      - name: Import Windows signing certificate
+        id: windows_signing
         if: ${{ env.WINDOWS_CERTIFICATE_BASE64 != '' }}
         shell: pwsh
         run: |
           $certPath = Join-Path $env:RUNNER_TEMP "aiusage-windows-signing.pfx"
           [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_BASE64))
 
+          $importArgs = @{
+            FilePath = $certPath
+            CertStoreLocation = "Cert:\CurrentUser\My"
+          }
+          if (-not [string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            $importArgs.Password = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
+          }
+
+          $cert = Import-PfxCertificate @importArgs
+          if ($null -eq $cert -or [string]::IsNullOrWhiteSpace($cert.Thumbprint)) {
+            throw "Windows signing certificate import did not return a thumbprint"
+          }
+
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "thumbprint=$($cert.Thumbprint)"
+          Remove-Item -LiteralPath $certPath -Force
+
+      - name: Prepare release build config
+        id: release_config
+        shell: pwsh
+        env:
+          WINDOWS_SIGNING_THUMBPRINT: ${{ steps.windows_signing.outputs.thumbprint }}
+        run: |
+          $hasSigning = -not [string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_THUMBPRINT)
+          $hasUpdater = -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY) `
+            -and -not [string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PUBLIC_KEY)
+
+          if (-not $hasSigning -and -not $hasUpdater) {
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "enabled=false"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "signing_enabled=false"
+            Add-Content -Path $env:GITHUB_OUTPUT -Value "updater_enabled=false"
+            "Using base Tauri config without Windows signing or updater artifacts."
+            return
+          }
+
+          $config = Get-Content Windows/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+
+          if ($hasSigning) {
+            if ($null -eq $config.bundle.windows) {
+              $config.bundle | Add-Member -NotePropertyName windows -NotePropertyValue ([pscustomobject]@{}) -Force
+            }
+            $config.bundle.windows | Add-Member -NotePropertyName certificateThumbprint -NotePropertyValue $env:WINDOWS_SIGNING_THUMBPRINT -Force
+            $config.bundle.windows | Add-Member -NotePropertyName digestAlgorithm -NotePropertyValue "sha256" -Force
+            $config.bundle.windows | Add-Member -NotePropertyName timestampUrl -NotePropertyValue $env:WINDOWS_TIMESTAMP_URL -Force
+          }
+
+          if ($hasUpdater) {
+            $endpoint = $env:WINDOWS_UPDATE_ENDPOINT
+            if ([string]::IsNullOrWhiteSpace($endpoint)) {
+              $endpoint = "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download/latest.json"
+            }
+
+            $config.bundle | Add-Member -NotePropertyName createUpdaterArtifacts -NotePropertyValue $true -Force
+            if ($null -eq $config.plugins) {
+              $config | Add-Member -NotePropertyName plugins -NotePropertyValue ([pscustomobject]@{}) -Force
+            }
+            $config.plugins | Add-Member -NotePropertyName updater -NotePropertyValue ([pscustomobject]@{
+              pubkey = $env:TAURI_SIGNING_PUBLIC_KEY
+              endpoints = @($endpoint)
+              windows = [pscustomobject]@{ installMode = "passive" }
+            }) -Force
+          }
+
+          $configPath = "src-tauri/tauri.windows-release.conf.json"
+          $config | ConvertTo-Json -Depth 20 | Set-Content -Path "Windows/$configPath" -Encoding utf8
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "enabled=true"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "config=$configPath"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "signing_enabled=$($hasSigning.ToString().ToLowerInvariant())"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "updater_enabled=$($hasUpdater.ToString().ToLowerInvariant())"
+
+      - name: Build Tauri bundles
+        working-directory: Windows
+        shell: pwsh
+        run: |
+          if ("${{ steps.release_config.outputs.enabled }}" -eq "true") {
+            pnpm tauri build --bundles nsis,msi --config "${{ steps.release_config.outputs.config }}"
+          } else {
+            pnpm tauri build --bundles nsis,msi
+          }
+
+      - name: Verify Windows signatures
+        if: ${{ steps.release_config.outputs.signing_enabled == 'true' }}
+        shell: pwsh
+        run: |
           $artifacts = @()
           $artifacts += Get-ChildItem Windows/target/release -Filter "*.exe" -File -ErrorAction SilentlyContinue
           $artifacts += Get-ChildItem Windows/target/release/bundle -Recurse -Include "*.exe","*.msi" -File
-          if ($artifacts.Count -eq 0) { throw "No Windows artifacts found to sign" }
+          if ($artifacts.Count -eq 0) { throw "No Windows artifacts found to verify" }
 
           foreach ($artifact in $artifacts) {
-            "Signing $($artifact.FullName)"
-            & signtool sign /fd SHA256 /f $certPath /p $env:WINDOWS_CERTIFICATE_PASSWORD /tr $env:WINDOWS_TIMESTAMP_URL /td SHA256 $artifact.FullName
-            if ($LASTEXITCODE -ne 0) { throw "signtool failed for $($artifact.FullName)" }
+            "Verifying $($artifact.FullName)"
             & signtool verify /pa /v $artifact.FullName
             if ($LASTEXITCODE -ne 0) { throw "signtool verification failed for $($artifact.FullName)" }
           }
-
-          Remove-Item -LiteralPath $certPath -Force
 
       - name: Collect release artifacts
         shell: pwsh
@@ -132,6 +213,42 @@ jobs:
 
           Copy-Item $setup.FullName "$dist/AIUsage-$version-windows-x64-setup.exe"
           Copy-Item $msi.FullName "$dist/AIUsage-$version-windows-x64.msi"
+
+          $setupSig = "$($setup.FullName).sig"
+          $msiSig = "$($msi.FullName).sig"
+          if (Test-Path -LiteralPath $setupSig) {
+            Copy-Item $setupSig "$dist/AIUsage-$version-windows-x64-setup.exe.sig"
+          }
+          if (Test-Path -LiteralPath $msiSig) {
+            Copy-Item $msiSig "$dist/AIUsage-$version-windows-x64.msi.sig"
+          }
+
+          $setupSigDist = "$dist/AIUsage-$version-windows-x64-setup.exe.sig"
+          if (Test-Path -LiteralPath $setupSigDist) {
+            $baseUrl = $env:WINDOWS_UPDATE_BASE_URL
+            if ([string]::IsNullOrWhiteSpace($baseUrl) -and "${{ github.ref_type }}" -eq "tag") {
+              $baseUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($baseUrl)) {
+              $signature = (Get-Content $setupSigDist -Raw).Trim()
+              $artifactUrl = "$($baseUrl.TrimEnd('/'))/AIUsage-$version-windows-x64-setup.exe"
+              $manifest = [ordered]@{
+                version = $version
+                notes = "AIUsage Windows $version"
+                pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+                platforms = [ordered]@{
+                  "windows-x86_64" = [ordered]@{
+                    signature = $signature
+                    url = $artifactUrl
+                  }
+                }
+              }
+              $manifest | ConvertTo-Json -Depth 10 | Set-Content "$dist/latest.json" -Encoding utf8
+            } else {
+              "Updater signatures were produced, but latest.json was skipped because no release URL is available."
+            }
+          }
 
           Get-ChildItem $dist -File | ForEach-Object {
             $hash = Get-FileHash $_.FullName -Algorithm SHA256
